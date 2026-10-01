@@ -1,0 +1,21 @@
+# Game files (never commit)
+original/
+assets/
+saves/
+*.apk
+*.dz
+*.s3e
+*.s3e.unpacked
+
+# Build output
+build/
+
+# Local, personal or secret config
+.mcp.json
+.vscode/
+.claude/
+.idea/
+.env
+.env.*
+*.keystore
+*.jks
