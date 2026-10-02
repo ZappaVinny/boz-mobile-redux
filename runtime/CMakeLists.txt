@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(boz_redux_client C)
+project(boz_redux_client C CXX)
 
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
   message(FATAL_ERROR "The client must be built as a 32-bit program; use a preset (cmake --preset linux-x86)")
@@ -7,6 +7,8 @@ endif()
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 if(NOT CMAKE_BUILD_TYPE)
@@ -112,6 +114,38 @@ target_link_options(codboz_s3e_loader PRIVATE ${BOZ_SYSTEM_LINK_OPTIONS})
 target_compile_options(codboz_s3e_loader PRIVATE -falign-functions=16)
 set_target_properties(codboz_s3e_loader PROPERTIES ENABLE_EXPORTS ON BUILD_RPATH "$ORIGIN")
 add_dependencies(codboz_s3e_loader SDL2 SDL2_mixer)
+
+# Launcher: Dear ImGui on SDL's 2D renderer (Direct3D on Windows, OpenGL or software on Linux).
+add_library(imgui STATIC
+  third_party/imgui/imgui.cpp
+  third_party/imgui/imgui_draw.cpp
+  third_party/imgui/imgui_tables.cpp
+  third_party/imgui/imgui_widgets.cpp
+  third_party/imgui/backends/imgui_impl_sdl2.cpp
+  third_party/imgui/backends/imgui_impl_sdlrenderer2.cpp)
+target_include_directories(imgui PUBLIC third_party/imgui third_party/imgui/backends)
+target_link_libraries(imgui PUBLIC SDL2::SDL2)
+
+add_executable(boz-redux
+  src/launcher/main.cpp
+  src/launcher/game_files.cpp
+  src/launcher/ini_file.cpp
+  src/launcher/os.cpp
+  src/launcher/sha256.cpp
+  src/client_config.c)
+target_include_directories(boz-redux PRIVATE include)
+target_compile_options(boz-redux PRIVATE ${BOZ_WARNINGS})
+target_link_libraries(boz-redux PRIVATE imgui)
+if(WIN32)
+  target_link_libraries(boz-redux PRIVATE comdlg32 shell32 ole32)
+  target_link_options(boz-redux PRIVATE -static -static-libgcc -static-libstdc++)
+  set_target_properties(boz-redux PROPERTIES WIN32_EXECUTABLE ON)
+else()
+  target_link_libraries(boz-redux PRIVATE pthread ${CMAKE_DL_LIBS})
+  target_link_options(boz-redux PRIVATE -static-libgcc -static-libstdc++)
+  set_target_properties(boz-redux PROPERTIES BUILD_RPATH "$ORIGIN")
+endif()
+add_dependencies(boz-redux codboz_s3e_loader codboz_apk_extract)
 
 add_executable(codboz_apk_extract tools/apk_extract/codboz_apk_extract.c third_party/lzma/LzmaDec.c)
 target_link_libraries(codboz_apk_extract PRIVATE boz_project)

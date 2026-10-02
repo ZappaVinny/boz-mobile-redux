@@ -11,7 +11,7 @@ This project is being done by a human guided Generative AI (LLM) system, with mi
 
 ## Downloads
 
-Builds for Linux (`BOZ-Redux-linux-x86.tar.gz`) and Windows (`BOZ-Redux-windows-x86.zip`) come from GitHub Actions: see the latest run's artifacts, or the Releases page for tagged versions. Put your APK next to `setup.sh` / `setup.bat`, run it once, then start the game with `run.sh` / `run.bat`.
+Builds for Linux (`BOZ-Redux-linux-x86.tar.gz`) and Windows (`BOZ-Redux-windows-x86.zip`) come from GitHub Actions: see the latest run's artifacts, or the Releases page for tagged versions. Start `boz-redux` (Linux) or `boz-redux.exe` (Windows): the launcher installs your APK, downloads or imports the data packs, edits settings and key bindings, and starts the game.
 
 ## Requirements
 
@@ -31,7 +31,8 @@ cmake --preset linux-x86                  # configure (32-bit)
 cmake --build --preset linux-x86-tests     # builds Unicorn, SDL2, the loader, extractor and tests
 ctest --preset linux-x86
 scripts/setup-game.sh         # extracts the APK into assets/ and links the data packs
-scripts/run-desktop.sh
+scripts/run-desktop.sh        # starts the game directly
+scripts/run-launcher.sh       # or opens the launcher for the repo's game data
 ```
 
 `setup-game.sh` reads `original/com.activision.boz.apk` and packs from `original/obb/` by default, and downloads any missing pack from Activision's CDN. Pass other paths as arguments: `setup-game.sh <apk> <packs-dir> <game-dir>`.

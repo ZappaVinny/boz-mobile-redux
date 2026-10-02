@@ -10,3 +10,6 @@
 [submodule "runtime/third_party/SDL2_mixer"]
 	path = runtime/third_party/SDL2_mixer
 	url = https://github.com/libsdl-org/SDL_mixer
+[submodule "runtime/third_party/imgui"]
+	path = runtime/third_party/imgui
+	url = https://github.com/ocornut/imgui

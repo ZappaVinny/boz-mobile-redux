@@ -218,15 +218,16 @@ static bool apply(const char *section, const char *key, const char *value) {
     return false;
 }
 
-static void write_default(const char *path) {
+bool client_config_write_default(const char *path) {
     FILE *file = fopen(path, "w");
     if (!file) {
         fprintf(stderr, "[config] cannot create %s\n", path);
-        return;
+        return false;
     }
     fputs(DEFAULT_CONFIG, file);
     fclose(file);
     fprintf(stderr, "[config] wrote default settings to %s\n", path);
+    return true;
 }
 
 void client_config_load(const char *root) {
@@ -234,7 +235,7 @@ void client_config_load(const char *root) {
     snprintf(path, sizeof(path), "%s/client.ini", root && root[0] ? root : ".");
     FILE *file = fopen(path, "r");
     if (!file) {
-        write_default(path);
+        client_config_write_default(path);
         file = fopen(path, "r");
         if (!file) {
             return;
