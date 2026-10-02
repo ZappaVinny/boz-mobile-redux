@@ -4,7 +4,8 @@ BOZ Redux brings the original *Call of Duty: Black Ops Zombies* mobile game (And
 
 ## Where we are
 
-- The original game code runs on desktop Linux through a built-in ARM emulator. The full game is playable with mouse and keyboard, in a resizable or fullscreen window.
+- The original game code runs on desktop Linux and Windows through a built-in ARM emulator. The full game is playable with mouse and keyboard, in a resizable or fullscreen window.
+- Automated builds produce a Linux tarball and a Windows zip.
 - No game files are included in this project, and none ever will be.
 
 ## How it fits together
@@ -21,7 +22,7 @@ Gameplay changes always live in mods, never hard-coded into the client.
 
 ### 1. Cross-platform client
 - One build system for Linux and Windows, with automated builds.
-- Windows support (Direct3D through ANGLE).
+- Windows support (bundled Mesa: GPU through Direct3D 12, software fallback).
 - Download a zip, run it, play.
 
 ### 2. Client essentials

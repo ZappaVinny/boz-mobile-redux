@@ -1,0 +1,15 @@
+diff --git i/qemu/accel/tcg/translate-all.c w/qemu/accel/tcg/translate-all.c
+index 71b6b2b1..cb7ac0a3 100644
+--- i/qemu/accel/tcg/translate-all.c
++++ w/qemu/accel/tcg/translate-all.c
+@@ -887,8 +887,8 @@ static LONG __fastcall code_gen_buffer_handler(PEXCEPTION_POINTERS ptr, struct u
+             uint8_t* base_end = base + COMMIT_COUNT * 4096;
+             uint32_t size = COMMIT_COUNT * 4096;
+             if (base_end >= right) {
+-                size = base_end - base;
+-                // whoops, we are almost run out of memory! Commit all instead
++                // Near the end of the reservation: commit only what is left of it.
++                size = right - base;
+             }
+             if (VirtualAlloc(base, size, MEM_COMMIT, PAGE_EXECUTE_READWRITE)) {
+                 return EXCEPTION_CONTINUE_EXECUTION;

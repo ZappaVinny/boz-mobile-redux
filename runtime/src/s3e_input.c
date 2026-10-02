@@ -139,6 +139,9 @@ struct sdl_input_api {
     const uint8_t *(*GetKeyboardState)(int *count);
     int (*SetRelativeMouseMode)(int enabled);
     void *(*GetMouseFocus)(void);
+    void *(*GetKeyboardFocus)(void);
+    uint32_t (*GetWindowFlags)(void *window);
+    int (*SetWindowFullscreen)(void *window, uint32_t flags);
     void (*GetWindowSize)(void *window, int *w, int *h);
     int (*HasEvent)(uint32_t type);
 };
@@ -195,12 +198,12 @@ static int32_t g_touchpad_y[TOUCHPAD_COUNT];
 static uint8_t g_touchpad_state[TOUCHPAD_COUNT];
 
 static int sdl_load_symbol(void **slot, const char *name) {
-    *slot = dlsym(g_sdl2, name);
+    *slot = plat_lib_symbol(g_sdl2, name);
     return *slot != NULL;
 }
 
 static void sdl_load_optional_symbol(void **slot, const char *name) {
-    *slot = dlsym(g_sdl2, name);
+    *slot = plat_lib_symbol(g_sdl2, name);
 }
 
 static const char *input_joystick_name(int index) {
@@ -251,7 +254,7 @@ static void input_open(void) {
     }
     g_sdl_tried = 1;
 
-    const char *names[] = {"libSDL2-2.0.so.0", "libSDL2.so", NULL};
+    const char *names[] = {BOZ_LIB_SDL2, NULL};
     g_sdl2 = open_first(names);
     if (!g_sdl2) {
         return;
@@ -284,6 +287,9 @@ static void input_open(void) {
     sdl_load_optional_symbol((void **)&g_sdl.GetKeyboardState, "SDL_GetKeyboardState");
     sdl_load_optional_symbol((void **)&g_sdl.SetRelativeMouseMode, "SDL_SetRelativeMouseMode");
     sdl_load_optional_symbol((void **)&g_sdl.GetMouseFocus, "SDL_GetMouseFocus");
+    sdl_load_optional_symbol((void **)&g_sdl.GetKeyboardFocus, "SDL_GetKeyboardFocus");
+    sdl_load_optional_symbol((void **)&g_sdl.GetWindowFlags, "SDL_GetWindowFlags");
+    sdl_load_optional_symbol((void **)&g_sdl.SetWindowFullscreen, "SDL_SetWindowFullscreen");
     sdl_load_optional_symbol((void **)&g_sdl.GetWindowSize, "SDL_GetWindowSize");
     sdl_load_optional_symbol((void **)&g_sdl.HasEvent, "SDL_HasEvent");
     if (!ok || g_sdl.InitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) != 0) {
@@ -732,6 +738,10 @@ enum {
     SC_1 = 30,
     SC_ESCAPE = 41,
     SC_TAB = 43,
+    SC_RETURN = 40,
+    SC_F11 = 68,
+    SC_LALT = 226,
+    SC_RALT = 230,
     SC_SPACE = 44,
     SC_LSHIFT = 225,
     MOUSE_LEFT = 1u << 0,
@@ -740,6 +750,7 @@ enum {
 
 static int g_desktop_game_mode;
 static int g_prev_tab;
+static int g_prev_fullscreen_key;
 static int g_prev_mouse_left;
 static float g_look_x;
 static float g_look_y;
@@ -895,6 +906,22 @@ static void desktop_update_game(const uint8_t *keys, int count, uint64_t dt) {
     game_action_apply(desktop_key(keys, count, SC_ESCAPE), &KEYMAP_START);
 }
 
+/* F11 or Alt+Enter switches between a window and borderless fullscreen. */
+static void desktop_toggle_fullscreen(void) {
+    enum { FULLSCREEN_DESKTOP = 0x00001001u, FULLSCREEN_ANY = 0x00000001u };
+    void *window = g_sdl.GetKeyboardFocus ? g_sdl.GetKeyboardFocus() : NULL;
+    if (!window || !g_sdl.GetWindowFlags || !g_sdl.SetWindowFullscreen) {
+        return;
+    }
+    int fullscreen = (g_sdl.GetWindowFlags(window) & FULLSCREEN_ANY) != 0;
+    if (g_sdl.SetWindowFullscreen(window, fullscreen ? 0 : FULLSCREEN_DESKTOP) != 0) {
+        fprintf(stderr, "[input] fullscreen toggle failed: %s\n",
+                g_sdl.GetError ? g_sdl.GetError() : "?");
+        return;
+    }
+    fprintf(stderr, "[input] %s\n", fullscreen ? "windowed" : "fullscreen");
+}
+
 static void desktop_update(uint64_t dt) {
     if (!desktop_available()) {
         return;
@@ -902,6 +929,14 @@ static void desktop_update(uint64_t dt) {
     void *window = g_sdl.GetMouseFocus();
     int count = 0;
     const uint8_t *keys = g_sdl.GetKeyboardState(&count);
+    int fullscreen_key =
+        keys && (desktop_key(keys, count, SC_F11) ||
+                 (desktop_key(keys, count, SC_RETURN) &&
+                  (desktop_key(keys, count, SC_LALT) || desktop_key(keys, count, SC_RALT))));
+    if (fullscreen_key && !g_prev_fullscreen_key) {
+        desktop_toggle_fullscreen();
+    }
+    g_prev_fullscreen_key = fullscreen_key;
     int tab = keys && desktop_key(keys, count, SC_TAB);
     if (tab && !g_prev_tab) {
         desktop_set_game_mode(!g_desktop_game_mode);
@@ -1025,7 +1060,7 @@ void input_shutdown(void) {
         if (g_sdl_initialized && g_sdl.QuitSubSystem) {
             g_sdl.QuitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER);
         }
-        dlclose(g_sdl2);
+        plat_lib_close(g_sdl2);
         g_sdl2 = NULL;
     }
     memset(&g_sdl, 0, sizeof(g_sdl));

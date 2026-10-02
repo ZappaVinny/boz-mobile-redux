@@ -22,6 +22,11 @@ static uint32_t host_add(uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_
     return a + b + c + d + e + f;
 }
 
+static uint32_t __attribute__((stdcall)) host_stdcall(uint32_t a, uint32_t b, uint32_t c,
+                                                      uint32_t d, uint32_t e, uint32_t f) {
+    return a * 1000 + b * 100 + c * 10 + d + e + f;
+}
+
 static uint64_t host_wide(void) {
     return 0x1122334455667788ull;
 }
@@ -57,6 +62,12 @@ int main(void) {
     args[1] = (uint32_t)(uintptr_t)&host_add;
     expect("guest calls host with stack args",
            (uint32_t)arm_emu_call((uint32_t)(uintptr_t)&g_code[2], 2, args), 1 + 2 + 3 + 4 + 5 + 6 + 100);
+
+    args[0] = 1;
+    args[1] = (uint32_t)(uintptr_t)&host_stdcall;
+    expect("guest calls stdcall host (callee pops args)",
+           (uint32_t)arm_emu_call((uint32_t)(uintptr_t)&g_code[2], 2, args),
+           1 * 1000 + 2 * 100 + 3 * 10 + 4 + 5 + 6 + 100);
 
     args[0] = (uint32_t)(uintptr_t)&host_wide;
     expect("64-bit host return", arm_emu_call((uint32_t)(uintptr_t)&g_code[16], 1, args),

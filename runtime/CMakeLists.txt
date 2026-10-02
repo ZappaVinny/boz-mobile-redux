@@ -1,0 +1,131 @@
+cmake_minimum_required(VERSION 3.20)
+project(boz_redux_client C)
+
+if(NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
+  message(FATAL_ERROR "The client must be built as a 32-bit program; use a preset (cmake --preset linux-x86)")
+endif()
+
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE RelWithDebInfo)
+endif()
+
+file(GLOB BOZ_UNICORN_PATCHES ${CMAKE_SOURCE_DIR}/third_party/patches/unicorn-*.patch)
+foreach(patch IN LISTS BOZ_UNICORN_PATCHES)
+  execute_process(COMMAND git apply --reverse --check ${patch}
+                  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/third_party/unicorn
+                  RESULT_VARIABLE already_applied OUTPUT_QUIET ERROR_QUIET)
+  if(NOT already_applied EQUAL 0)
+    execute_process(COMMAND git apply ${patch}
+                    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/third_party/unicorn
+                    RESULT_VARIABLE patch_result)
+    if(NOT patch_result EQUAL 0)
+      message(FATAL_ERROR "Unicorn patch failed to apply: ${patch}")
+    endif()
+    message(STATUS "Applied ${patch}")
+  endif()
+endforeach()
+
+set(UNICORN_ARCH "arm" CACHE STRING "" FORCE)
+set(UNICORN_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(UNICORN_INSTALL OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+add_subdirectory(third_party/unicorn EXCLUDE_FROM_ALL)
+
+set(SDL_SHARED ON CACHE BOOL "" FORCE)
+set(SDL_STATIC OFF CACHE BOOL "" FORCE)
+set(SDL_TEST OFF CACHE BOOL "" FORCE)
+add_subdirectory(third_party/SDL2 EXCLUDE_FROM_ALL)
+
+set(BOZ_WARNINGS -Wall -Wextra -Werror -Wno-format-truncation)
+
+add_library(boz_project INTERFACE)
+target_include_directories(boz_project INTERFACE include src third_party/lzma)
+target_compile_definitions(boz_project INTERFACE _GNU_SOURCE)
+target_compile_options(boz_project INTERFACE ${BOZ_WARNINGS})
+
+if(WIN32)
+  set(BOZ_PLATFORM_SOURCES src/platform/platform_win32.c src/platform/gl_probe_win32.c)
+  set(BOZ_ZEROCONF_PLATFORM src/zeroconf_platform_win32.c)
+else()
+  set(BOZ_PLATFORM_SOURCES src/platform/platform_posix.c)
+  set(BOZ_ZEROCONF_PLATFORM src/zeroconf_platform_posix.c)
+endif()
+
+add_executable(codboz_s3e_loader
+  ${BOZ_PLATFORM_SOURCES}
+  src/arm_emu.c
+  src/codboz_assets.c
+  src/codboz_frame_interpolation.c
+  src/main.c
+  src/s3e_config.c
+  src/s3e_audio.c
+  src/s3e_audio_unit.c
+  src/s3e_egl.c
+  src/s3e_file.c
+  src/s3e_gl.c
+  src/s3e_host.c
+  src/s3e_image.c
+  src/s3e_input.c
+  src/s3e_memory.c
+  src/device_id.c
+  src/s3e_runtime.c
+  src/s3e_timer.c
+  src/s3e_socket.c
+  src/mdns_wire.c
+  ${BOZ_ZEROCONF_PLATFORM}
+  src/s3e_zeroconf.c)
+if(WIN32)
+  set(BOZ_SYSTEM_LIBS ws2_32 iphlpapi winmm bcrypt)
+  set(BOZ_SYSTEM_LINK_OPTIONS -static -static-libgcc -Wl,--large-address-aware)
+else()
+  set(BOZ_SYSTEM_LIBS ${CMAKE_DL_LIBS} pthread m)
+  set(BOZ_SYSTEM_LINK_OPTIONS)
+endif()
+target_link_libraries(codboz_s3e_loader PRIVATE boz_project unicorn ${BOZ_SYSTEM_LIBS})
+target_link_options(codboz_s3e_loader PRIVATE ${BOZ_SYSTEM_LINK_OPTIONS})
+target_compile_options(codboz_s3e_loader PRIVATE -falign-functions=16)
+set_target_properties(codboz_s3e_loader PROPERTIES ENABLE_EXPORTS ON BUILD_RPATH "$ORIGIN")
+add_dependencies(codboz_s3e_loader SDL2)
+
+add_executable(codboz_apk_extract tools/apk_extract/codboz_apk_extract.c third_party/lzma/LzmaDec.c)
+target_link_libraries(codboz_apk_extract PRIVATE boz_project)
+
+enable_testing()
+
+function(boz_test name)
+  cmake_parse_arguments(T "" "" "SOURCES;DEFINES;INCLUDES" ${ARGN})
+  add_executable(${name} tests/${name}.c ${T_SOURCES} tests/test_support.c)
+  target_link_libraries(${name} PRIVATE boz_project pthread)
+  target_compile_definitions(${name} PRIVATE ${T_DEFINES})
+  target_compile_options(${name} PRIVATE -UNDEBUG)
+  target_include_directories(${name} PRIVATE ${T_INCLUDES})
+  set_target_properties(${name} PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests)
+  add_test(NAME ${name} COMMAND ${name} WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+endfunction()
+
+boz_test(s3e_socket_test SOURCES src/s3e_socket.c src/s3e_config.c)
+boz_test(s3e_config_test SOURCES src/s3e_config.c src/codboz_assets.c)
+boz_test(mdns_wire_test SOURCES src/mdns_wire.c)
+boz_test(s3e_zeroconf_test SOURCES tests/zeroconf_platform_fake.c src/s3e_zeroconf.c src/mdns_wire.c
+         INCLUDES tests)
+boz_test(s3e_timer_test SOURCES src/s3e_timer.c)
+boz_test(s3e_memory_test SOURCES src/s3e_memory.c)
+boz_test(device_id_test SOURCES src/device_id.c ${BOZ_PLATFORM_SOURCES})
+boz_test(s3e_audio_test SOURCES src/s3e_audio.c
+         DEFINES dlsym=s3e_audio_test_dlsym dlclose=s3e_audio_test_dlclose
+                 plat_lib_symbol=s3e_audio_test_dlsym plat_lib_close=s3e_audio_test_dlclose)
+boz_test(s3e_audio_unit_test SOURCES src/s3e_audio_unit.c)
+boz_test(s3e_input_test SOURCES src/s3e_input.c
+         DEFINES dlsym=s3e_input_test_dlsym dlclose=s3e_input_test_dlclose
+                 plat_lib_symbol=s3e_input_test_dlsym plat_lib_close=s3e_input_test_dlclose)
+
+add_executable(arm_emu_test tests/arm_emu_test.c src/arm_emu.c ${BOZ_PLATFORM_SOURCES})
+target_link_libraries(arm_emu_test PRIVATE boz_project unicorn ${CMAKE_DL_LIBS} pthread m)
+target_compile_options(arm_emu_test PRIVATE -falign-functions=16 -UNDEBUG)
+set_target_properties(arm_emu_test PROPERTIES ENABLE_EXPORTS ON
+                      RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests)
+add_test(NAME arm_emu_test COMMAND arm_emu_test)

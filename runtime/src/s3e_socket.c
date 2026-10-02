@@ -1,10 +1,5 @@
 #include "s3e_host_internal.h"
 
-#include <netdb.h>
-#include <netinet/tcp.h>
-#include <poll.h>
-#include <sys/ioctl.h>
-#include <sys/socket.h>
 
 enum {
     S3E_RESULT_SUCCESS = 0,
@@ -185,7 +180,7 @@ static void close_socket_slot(uint32_t index) {
     struct socket_slot *slot = &g_socket_slots[index];
     uint32_t generation = slot->generation + 1;
     if (slot->fd >= 0) {
-        close(slot->fd);
+        socket_close(slot->fd);
     }
     memset(slot, 0, sizeof(*slot));
     slot->fd = -1;
@@ -193,11 +188,10 @@ static void close_socket_slot(uint32_t index) {
 }
 
 static int set_nonblocking(int fd) {
-    int enabled = 1;
-    if (ioctl(fd, FIONBIO, &enabled) < 0) {
+    if (socket_set_nonblocking(fd, 1) < 0) {
         return -1;
     }
-    return ioctl(fd, FIOCLEX) < 0 ? -1 : 0;
+    return socket_set_cloexec(fd) < 0 ? -1 : 0;
 }
 
 static int socket_family(int32_t domain) {
@@ -258,13 +252,13 @@ static void sockaddr_to_address(const struct sockaddr *source, socklen_t length,
         return;
     }
     memset(address, 0, sizeof(*address));
-    if (source->sa_family == AF_INET && length >= sizeof(struct sockaddr_in)) {
+    if (source->sa_family == AF_INET && (size_t)length >= sizeof(struct sockaddr_in)) {
         const struct sockaddr_in *ipv4 = (const struct sockaddr_in *)source;
         address->type = S3E_SOCKET_ADDR_IPV4;
         address->ip_address = ipv4->sin_addr.s_addr;
         address->port = ipv4->sin_port;
         (void)inet_ntop(AF_INET, &ipv4->sin_addr, address->string, sizeof(address->string));
-    } else if (source->sa_family == AF_INET6 && length >= sizeof(struct sockaddr_in6)) {
+    } else if (source->sa_family == AF_INET6 && (size_t)length >= sizeof(struct sockaddr_in6)) {
         const struct sockaddr_in6 *ipv6 = (const struct sockaddr_in6 *)source;
         address->type = S3E_SOCKET_ADDR_IPV6;
         memcpy(address->ipv6_address, &ipv6->sin6_addr, sizeof(address->ipv6_address));
@@ -521,12 +515,12 @@ void *s3eSocketCreate(uint32_t type, int32_t domain) {
     }
     int fd = socket(family, kind, 0);
     if (fd < 0) {
-        set_socket_error(map_socket_errno(errno));
+        set_socket_error(map_socket_errno(socket_errno()));
         return NULL;
     }
     if (set_nonblocking(fd) < 0) {
-        int error = errno;
-        close(fd);
+        int error = socket_errno();
+        socket_close(fd);
         set_socket_error(map_socket_errno(error));
         return NULL;
     }
@@ -536,7 +530,7 @@ void *s3eSocketCreate(uint32_t type, int32_t domain) {
     }
     int slot = allocate_socket_slot(fd, (int32_t)type, domain);
     if (slot < 0) {
-        close(fd);
+        socket_close(fd);
         return NULL;
     }
     void *handle = slot_handle((uint32_t)slot);
@@ -573,11 +567,11 @@ int32_t s3eSocketBind(void *socket_handle_value, const struct s3e_inet_address *
     if (reuse_address) {
         int enabled = 1;
         if (setsockopt(slot->fd, SOL_SOCKET, SO_REUSEADDR, &enabled, sizeof(enabled)) < 0) {
-            return fail_with_errno(errno);
+            return fail_with_errno(socket_errno());
         }
     }
     if (bind(slot->fd, (const struct sockaddr *)&storage, length) < 0) {
-        return fail_with_errno(errno);
+        return fail_with_errno(socket_errno());
     }
     set_socket_error(S3E_SOCKET_ERR_NONE);
     return S3E_RESULT_SUCCESS;
@@ -589,7 +583,7 @@ int32_t s3eSocketListen(void *socket_handle_value, uint16_t backlog) {
         return S3E_RESULT_ERROR;
     }
     if (listen(slot->fd, backlog) < 0) {
-        return fail_with_errno(errno);
+        return fail_with_errno(socket_errno());
     }
     set_socket_error(S3E_SOCKET_ERR_NONE);
     return S3E_RESULT_SUCCESS;
@@ -605,7 +599,7 @@ void *s3eSocketAccept(void *socket_handle_value, struct s3e_inet_address *addres
     socklen_t peer_length = sizeof(peer);
     int fd = accept(slot->fd, (struct sockaddr *)&peer, &peer_length);
     if (fd < 0) {
-        int error = errno;
+        int error = socket_errno();
         if ((error == EAGAIN || error == EWOULDBLOCK) && callback) {
             slot->accept_callback = callback;
             slot->accept_user_data = user_data;
@@ -616,14 +610,14 @@ void *s3eSocketAccept(void *socket_handle_value, struct s3e_inet_address *addres
         return NULL;
     }
     if (set_nonblocking(fd) < 0) {
-        int error = errno;
-        close(fd);
+        int error = socket_errno();
+        socket_close(fd);
         set_socket_error(map_socket_errno(error));
         return NULL;
     }
     int accepted_slot = allocate_socket_slot(fd, S3E_SOCKET_TCP, slot->domain);
     if (accepted_slot < 0) {
-        close(fd);
+        socket_close(fd);
         return NULL;
     }
     slot->accept_callback = NULL;
@@ -655,7 +649,7 @@ int32_t s3eSocketConnect(void *socket_handle_value, const struct s3e_inet_addres
         set_socket_error(S3E_SOCKET_ERR_NONE);
         return S3E_RESULT_SUCCESS;
     }
-    int error = errno;
+    int error = socket_errno();
     if (error == EINPROGRESS || error == EALREADY) {
         slot->connect_pending = 1;
         slot->connect_callback = callback;
@@ -694,7 +688,7 @@ int32_t s3eSocketSend(void *socket_handle_value, const char *buffer, uint32_t le
         return -1;
     }
     ssize_t sent = send(slot->fd, buffer, length, send_flags(flags));
-    int native_errno = sent < 0 ? errno : 0;
+    int native_errno = sent < 0 ? socket_errno() : 0;
     if (sent < 0) {
         set_socket_error(map_socket_errno(native_errno));
         return -1;
@@ -718,7 +712,7 @@ int32_t s3eSocketSendTo(void *socket_handle_value, const char *buffer, uint32_t 
     ssize_t sent = sendto(slot->fd, buffer, length, send_flags(flags),
                           (const struct sockaddr *)&storage, address_length);
     if (sent < 0) {
-        set_socket_error(map_socket_errno(errno));
+        set_socket_error(map_socket_errno(socket_errno()));
         return -1;
     }
     set_socket_error(S3E_SOCKET_ERR_NONE);
@@ -733,7 +727,7 @@ int32_t s3eSocketRecv(void *socket_handle_value, char *buffer, uint32_t length, 
     }
     ssize_t received = recv(slot->fd, buffer, length, message_flags(flags));
     if (received < 0) {
-        set_socket_error(map_socket_errno(errno));
+        set_socket_error(map_socket_errno(socket_errno()));
         return -1;
     }
     set_socket_error(S3E_SOCKET_ERR_NONE);
@@ -756,7 +750,7 @@ int32_t s3eSocketRecvFrom(void *socket_handle_value, char *buffer, uint32_t leng
     ssize_t received = recvfrom(slot->fd, buffer, length, native_flags, (struct sockaddr *)&source,
                                 &source_length);
     if (received < 0) {
-        set_socket_error(map_socket_errno(errno));
+        set_socket_error(map_socket_errno(socket_errno()));
         return -1;
     }
     struct s3e_inet_address source_address;
@@ -859,7 +853,7 @@ static int32_t get_socket_name(void *socket_handle_value, struct s3e_inet_addres
     int result = peer ? getpeername(slot->fd, (struct sockaddr *)&storage, &length)
                       : getsockname(slot->fd, (struct sockaddr *)&storage, &length);
     if (result < 0) {
-        return fail_with_errno(errno);
+        return fail_with_errno(socket_errno());
     }
     sockaddr_to_address((const struct sockaddr *)&storage, length, address);
     set_socket_error(S3E_SOCKET_ERR_NONE);
@@ -900,7 +894,9 @@ static void dispatch_socket_event(const struct socket_poll_entry *entry) {
         int native_error = 0;
         socklen_t error_length = sizeof(native_error);
         if (getsockopt(slot->fd, SOL_SOCKET, SO_ERROR, &native_error, &error_length) < 0) {
-            native_error = errno;
+            native_error = socket_errno();
+        } else {
+            native_error = socket_translate_error(native_error);
         }
         s3e_socket_callback_fn callback = slot->connect_callback;
         void *user_data = slot->connect_user_data;

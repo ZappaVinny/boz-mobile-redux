@@ -2,12 +2,12 @@
 #define CODBOZ_S3E_HOST_INTERNAL_H
 
 #include "s3e_host.h"
-#include <arpa/inet.h>
+#include "platform/platform.h"
+#include "socket_compat.h"
+#include "posix_compat.h"
 #include <ctype.h>
-#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <netinet/in.h>
 #include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -15,7 +15,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
-#include <sys/mman.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
@@ -24,6 +23,24 @@
 #define S3E_SOFTFP __attribute__((pcs("aapcs")))
 #else
 #define S3E_SOFTFP
+#endif
+
+#if defined(_WIN32) && defined(__i386__)
+#define GL_APIENTRY __stdcall
+#else
+#define GL_APIENTRY
+#endif
+
+#if defined(_WIN32)
+#define BOZ_LIB_SDL2 "SDL2.dll"
+#define BOZ_LIB_SDL2_MIXER "SDL2_mixer.dll"
+#define BOZ_LIB_EGL "libEGL.dll"
+#define BOZ_LIB_GLES2 "libGLESv2.dll"
+#else
+#define BOZ_LIB_SDL2 "libSDL2-2.0.so.0", "libSDL2.so"
+#define BOZ_LIB_SDL2_MIXER "libSDL2_mixer-2.0.so.0", "libSDL2_mixer.so"
+#define BOZ_LIB_EGL "libEGL.so.1", "libEGL.so"
+#define BOZ_LIB_GLES2 "libGLESv2.so.2", "libGLESv2.so"
 #endif
 
 #define S3E_GUEST_ARG(value) ((uint32_t)(uintptr_t)(value))
@@ -364,6 +381,7 @@ void s3e_zero_conf_shutdown(void);
 void s3e_zero_conf_process_packet(const uint8_t *packet, size_t packet_size,
                                   const struct sockaddr_in *source);
 void *make_stub(const char *symbol);
+void *make_lazy_gl_stub(const char *symbol);
 
 void *s3eMallocBase(uint32_t size, const char *file, int line);
 void *s3eReallocBase(void *ptr, uint32_t size, const char *file, int line);

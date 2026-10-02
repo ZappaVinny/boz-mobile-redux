@@ -1,0 +1,33 @@
+BOZ Redux bundles the following third-party components.
+
+Licence of this package
+  BOZ Redux's own code is MIT licensed. The game loader (codboz_s3e_loader) includes the
+  Unicorn Engine, which is GPLv2, so the loader binary as a whole is distributed under the
+  GPLv2. Complete source code, including the Unicorn patches used for this build:
+  https://github.com/ZappaVinny/boz-mobile-redux
+
+Unicorn Engine (built into codboz_s3e_loader)
+  https://github.com/unicorn-engine/unicorn - GPLv2 (QEMU-derived)
+
+SDL2 (SDL2.dll / libSDL2-2.0.so.0)
+  https://github.com/libsdl-org/SDL - zlib license
+
+LZMA SDK (APK extractor)
+  https://www.7-zip.org/sdk.html - public domain
+
+Windows package only:
+
+Mesa 3D, built by mesa-dist-win (opengl32.dll, libgallium_wgl.dll, libEGL.dll,
+libGLESv2.dll, libGLESv1_CM.dll)
+  https://gitlab.freedesktop.org/mesa/mesa - MIT license
+  https://github.com/pal1000/mesa-dist-win - MIT license
+
+DirectX Shader Compiler IL validator (dxil.dll)
+  https://github.com/microsoft/DirectXShaderCompiler - redistributed under Microsoft's DXC
+  redistribution terms
+
+Microsoft WARP (d3d10warp.dll), as shipped by mesa-dist-win
+  https://www.nuget.org/packages/Microsoft.Direct3D.WARP - redistributed under its package
+  licence terms
+
+Call of Duty: Black Ops Zombies game files are not included and belong to Activision.

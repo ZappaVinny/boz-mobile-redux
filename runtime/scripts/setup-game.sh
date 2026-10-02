@@ -4,9 +4,9 @@ here="$(cd "$(dirname "$0")/.." && pwd)"
 apk="${1:-$here/../original/com.activision.boz.apk}"
 packs="${2:-$here/../original/obb}"
 game="${3:-$(cd "$here/.." && pwd)}"
-extract="$here/build/host/codboz_apk_extract"
+extract="${BOZ_BIN:-$here/build/linux-x86/bin}/codboz_apk_extract"
 
-[ -x "$extract" ] || { echo "run 'make' in runtime/ first" >&2; exit 1; }
+[ -x "$extract" ] || { echo "build first: cmake --preset linux-x86 && cmake --build --preset linux-x86" >&2; exit 1; }
 [ -f "$apk" ] || { echo "APK not found: $apk" >&2; exit 1; }
 
 mkdir -p "$game/assets"

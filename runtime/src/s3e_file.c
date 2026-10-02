@@ -266,7 +266,7 @@ static FILE *open_dtrz_entry(const char *name, char *opened_path, size_t opened_
     }
     fclose(archive);
     codboz_hide_virtual_stick_artwork(entry->name, buffer, entry->size);
-    FILE *file = fmemopen(buffer, alloc_size, "rb");
+    FILE *file = plat_memfile(buffer, alloc_size);
     if (!file) {
         free(buffer);
         return NULL;
@@ -340,6 +340,9 @@ static void sanitize_file_mode(const char *mode, char *out, size_t out_size) {
     out[n] = 0;
     if (!out[0]) {
         snprintf(out, out_size, "rb");
+    } else if (!strchr(out, 'b') && n + 1 < out_size) {
+        out[n++] = 'b';
+        out[n] = 0;
     }
 }
 
@@ -451,7 +454,11 @@ void *s3eFileOpen(const char *name, const char *mode) {
         file = open_dtrz_entry(safe_name, opened_path, sizeof(opened_path));
     }
     if (!file && is_read_mode(safe_mode) && strcmp(base_name(safe_name), "console.bin") == 0) {
+#if defined(_WIN32)
+        file = fopen("NUL", "rb");
+#else
         file = fopen("/dev/null", "rb");
+#endif
     }
     return file;
 }
@@ -527,7 +534,7 @@ const char *s3eFileGetErrorString(void) {
 }
 
 void *s3eFileOpenFromMemory(void *buffer, uint32_t size) {
-    return buffer && size ? fmemopen(buffer, size, "rb") : NULL;
+    return buffer && size ? plat_memfile(buffer, size) : NULL;
 }
 
 int32_t s3eFileGetFileInt(void *file, uint32_t key) {
@@ -553,7 +560,7 @@ int32_t s3eFileRename(const char *old_name, const char *new_name) {
     char new_path[1200];
     make_path(old_path, sizeof(old_path), old_name);
     make_path(new_path, sizeof(new_path), new_name);
-    return rename(old_path, new_path);
+    return plat_rename_replace(old_path, new_path);
 }
 
 int32_t s3eFileAddUserFileSys(const char *prefix, const char *path) {

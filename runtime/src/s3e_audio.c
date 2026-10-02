@@ -172,12 +172,12 @@ static int play_sound_channel(int channel, const void *data, uint32_t samples, u
                               uint32_t loop_index, int begin_at_loop);
 
 static int load_symbol(void *handle, void **slot, const char *name) {
-    *slot = dlsym(handle, name);
+    *slot = plat_lib_symbol(handle, name);
     return *slot != NULL;
 }
 
 static void load_optional_symbol(void *handle, void **slot, const char *name) {
-    *slot = dlsym(handle, name);
+    *slot = plat_lib_symbol(handle, name);
 }
 
 static const char *mixer_error(void) {
@@ -558,8 +558,8 @@ static int audio_open(void) {
     }
     g_audio_tried = 1;
 
-    const char *sdl_names[] = {"libSDL2-2.0.so.0", "libSDL2.so", NULL};
-    const char *mixer_names[] = {"libSDL2_mixer-2.0.so.0", "libSDL2_mixer.so", NULL};
+    const char *sdl_names[] = {BOZ_LIB_SDL2, NULL};
+    const char *mixer_names[] = {BOZ_LIB_SDL2_MIXER, NULL};
     g_sdl2_audio = open_first(sdl_names);
     g_sdl_mixer = open_first(mixer_names);
     if (!g_sdl2_audio || !g_sdl_mixer) {
@@ -846,7 +846,7 @@ void audio_unit_backend_shutdown(void) {
 }
 
 static uint8_t *read_audio_file(const char *path, uint32_t *out_size) {
-    int fd = open(path, O_RDONLY);
+    int fd = open(path, O_RDONLY | O_BINARY);
     if (fd < 0) {
         return NULL;
     }
@@ -936,10 +936,10 @@ void audio_shutdown(void) {
         g_sdl_audio.QuitSubSystem(SDL_INIT_AUDIO);
     }
     if (g_sdl_mixer) {
-        dlclose(g_sdl_mixer);
+        plat_lib_close(g_sdl_mixer);
     }
     if (g_sdl2_audio) {
-        dlclose(g_sdl2_audio);
+        plat_lib_close(g_sdl2_audio);
     }
     memset(&g_mixer, 0, sizeof(g_mixer));
     memset(&g_sdl_audio, 0, sizeof(g_sdl_audio));

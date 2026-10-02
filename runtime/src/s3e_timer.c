@@ -146,5 +146,11 @@ int64_t s3eTimerGetLocaltimeOffset(const uint64_t *utc_ms) {
     if (!localtime_r(&now, &local_tm)) {
         return 0;
     }
+#if defined(_WIN32)
+    long timezone_seconds = 0;
+    _get_timezone(&timezone_seconds);
+    return ((int64_t)-timezone_seconds + (local_tm.tm_isdst > 0 ? 3600 : 0)) * 1000;
+#else
     return (int64_t)local_tm.tm_gmtoff * 1000;
+#endif
 }

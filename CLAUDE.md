@@ -15,8 +15,10 @@ ARM `#if defined(__arm__)` paths are left in the source but nothing builds or sh
 
 ## Layout
 
-- `runtime/`: the desktop runtime. `make`, `make test`, `scripts/setup-game.sh`, `scripts/run-desktop.sh`.
-- `runtime/third_party/unicorn`, `runtime/third_party/SDL2`: submodules, built 32-bit by the Makefile via `cmake/i686-linux.cmake` (the `gcc-m32` wrapper is required; Unicorn's CMake ignores `-m32` flags).
+- `runtime/`: the desktop runtime. Build with CMake presets: `cmake --preset linux-x86`, `cmake --build --preset linux-x86` (`linux-x86-tests` builds tests too), `ctest --preset linux-x86`. Outputs go to `build/linux-x86/bin/` (loader, extractor, `libSDL2`; loader RUNPATH is `$ORIGIN`). Then `scripts/setup-game.sh`, `scripts/run-desktop.sh`.
+- Windows: `cmake --preset windows-x86 && cmake --build --preset windows-x86 && scripts/package-windows.sh` (MinGW-w64 cross build; bundles Mesa from mesa-dist-win). Windows renders through Mesa's WGL `opengl32.dll`: SDL makes a desktop GL window and `s3e_egl.c` swaps in an OpenGL ES context via `WGL_EXT_create_context_es_profile` (Mesa's EGL can't create window surfaces on Windows). `src/platform/gl_probe_win32.c` picks `GALLIUM_DRIVER` at startup (d3d12, else llvmpipe). Linux tarball: `scripts/package-linux.sh`. CI: `.github/workflows/build.yml`; tags `v*` publish a release.
+- `runtime/third_party/patches/unicorn-*.patch`: applied to the Unicorn submodule at configure time (TLB/dirty-tracking speedups, Windows code-buffer commit fix).
+- `runtime/third_party/unicorn`, `runtime/third_party/SDL2`: submodules, built 32-bit as CMake subprojects via `cmake/i686-linux.cmake` (the `gcc-m32` wrapper is required; Unicorn's CMake ignores `-m32` flags).
 - `tools/destin`: submodule for `dade`, the `.dz` asset extractor. Install with `uv tool install dade`. Always pass `--no-delete` to `dade marmalade extract-dz`; it deletes the source archive by default.
 - `original/` (gitignored): `com.activision.boz.apk` (1.0.11) and `obb/` with the CDN packs plus `.dz.dat` markers.
 - `assets/` (gitignored): extracted game data and pack links, made by `setup-game.sh`. The repo root is the game root (`--root`); the port looks up files in `<root>/assets/`.

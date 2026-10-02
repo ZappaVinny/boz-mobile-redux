@@ -1,6 +1,6 @@
 #include "arm_emu.h"
+#include "platform/platform.h"
 
-#include <dlfcn.h>
 #include <errno.h>
 #include <inttypes.h>
 #include <pthread.h>
@@ -8,7 +8,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
 #include <time.h>
 #include <unicorn/unicorn.h>
 
@@ -26,17 +25,130 @@ struct arm_emu {
     int depth;
 };
 
-typedef uint64_t (*host_fn16)(uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
-                              uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t,
-                              uint32_t, uint32_t, uint32_t, uint32_t);
+#if defined(__i386__)
+/* Calls fn with 16 stack words and restores esp afterwards, so cdecl and stdcall callees
+   (Windows GL/EGL entry points pop their own arguments) both return a balanced stack. */
+static uint64_t call_host16(uint32_t fn, const uint32_t *args) {
+    uint32_t lo, hi;
+    __asm__ volatile("movl %%esp, %%esi\n\t"
+                     "andl $-16, %%esp\n\t"
+                     "subl $64, %%esp\n\t"
+                     "movl 0(%%edi), %%eax\n\t movl %%eax, 0(%%esp)\n\t"
+                     "movl 4(%%edi), %%eax\n\t movl %%eax, 4(%%esp)\n\t"
+                     "movl 8(%%edi), %%eax\n\t movl %%eax, 8(%%esp)\n\t"
+                     "movl 12(%%edi), %%eax\n\t movl %%eax, 12(%%esp)\n\t"
+                     "movl 16(%%edi), %%eax\n\t movl %%eax, 16(%%esp)\n\t"
+                     "movl 20(%%edi), %%eax\n\t movl %%eax, 20(%%esp)\n\t"
+                     "movl 24(%%edi), %%eax\n\t movl %%eax, 24(%%esp)\n\t"
+                     "movl 28(%%edi), %%eax\n\t movl %%eax, 28(%%esp)\n\t"
+                     "movl 32(%%edi), %%eax\n\t movl %%eax, 32(%%esp)\n\t"
+                     "movl 36(%%edi), %%eax\n\t movl %%eax, 36(%%esp)\n\t"
+                     "movl 40(%%edi), %%eax\n\t movl %%eax, 40(%%esp)\n\t"
+                     "movl 44(%%edi), %%eax\n\t movl %%eax, 44(%%esp)\n\t"
+                     "movl 48(%%edi), %%eax\n\t movl %%eax, 48(%%esp)\n\t"
+                     "movl 52(%%edi), %%eax\n\t movl %%eax, 52(%%esp)\n\t"
+                     "movl 56(%%edi), %%eax\n\t movl %%eax, 56(%%esp)\n\t"
+                     "movl 60(%%edi), %%eax\n\t movl %%eax, 60(%%esp)\n\t"
+                     "call *%%ecx\n\t"
+                     "movl %%esi, %%esp\n\t"
+                     : "=a"(lo), "=d"(hi), "+c"(fn)
+                     : "D"(args)
+                     : "esi", "memory", "cc");
+    return ((uint64_t)hi << 32) | lo;
+}
+#else
+#error "arm_emu.c requires a 32-bit x86 host"
+#endif
 
 static uint32_t *g_svc_page;
 static __thread struct arm_emu *t_emu;
+static __thread uint32_t t_call_scratch;
 static long g_trace_limit;
 static _Atomic unsigned long g_host_calls;
 static _Atomic unsigned long g_traced;
 static _Atomic uint32_t g_last_target;
 static uc_engine *_Atomic g_main_uc;
+extern size_t uc_debug_full_flushes;
+extern size_t uc_debug_notdirty_writes;
+extern size_t uc_debug_tlb_fills;
+
+static bool host_code_address(uint32_t address) {
+    return plat_address_in_module((const void *)(uintptr_t)address);
+}
+
+static uint32_t g_image_start;
+static uint32_t g_image_end;
+static bool g_trace_code;
+
+enum { CODE_PAGE_SLOTS = 256 };
+static struct {
+    uint32_t page;
+    unsigned long count;
+} g_code_pages[CODE_PAGE_SLOTS];
+
+static void on_block(uc_engine *uc, uint64_t address, uint32_t size, void *user_data) {
+    (void)uc;
+    (void)size;
+    (void)user_data;
+    if (address >= g_image_start && address < g_image_end) {
+        return;
+    }
+    uint32_t page = (uint32_t)address & ~0xfffu;
+    unsigned index = (page >> 12) % CODE_PAGE_SLOTS;
+    for (unsigned probe = 0; probe < CODE_PAGE_SLOTS; ++probe) {
+        unsigned slot = (index + probe) % CODE_PAGE_SLOTS;
+        if (g_code_pages[slot].page == page || g_code_pages[slot].page == 0) {
+            g_code_pages[slot].page = page;
+            g_code_pages[slot].count++;
+            return;
+        }
+    }
+}
+
+static void report_code_pages(void) {
+    for (unsigned i = 0; i < CODE_PAGE_SLOTS; ++i) {
+        if (g_code_pages[i].count) {
+            fprintf(stderr, "[code] page %08x executed %lu blocks%s\n", g_code_pages[i].page,
+                    g_code_pages[i].count,
+                    host_code_address(g_code_pages[i].page) ? " (host module shadow)" : "");
+            g_code_pages[i].count = 0;
+        }
+    }
+}
+
+enum { CODE_RANGES_MAX = 16 };
+static struct {
+    uint32_t start;
+    uint32_t end;
+} g_code_ranges[CODE_RANGES_MAX];
+static unsigned g_code_range_count;
+
+void arm_emu_register_code(uint32_t start, uint32_t size) {
+    if (g_code_range_count >= CODE_RANGES_MAX || !size) {
+        return;
+    }
+    uint32_t lo = start & ~(uint32_t)(PAGE_SIZE_EMU - 1);
+    uint32_t hi = (start + size + PAGE_SIZE_EMU - 1) & ~(uint32_t)(PAGE_SIZE_EMU - 1);
+    g_code_ranges[g_code_range_count].start = lo;
+    g_code_ranges[g_code_range_count].end = hi;
+    g_code_range_count++;
+}
+
+static void map_code_ranges(uc_engine *uc) {
+    for (unsigned i = 0; i < g_code_range_count; ++i) {
+        uint32_t lo = g_code_ranges[i].start;
+        uint32_t hi = g_code_ranges[i].end;
+        if (uc_mem_map_ptr(uc, lo, hi - lo, UC_PROT_ALL, (void *)(uintptr_t)lo) != UC_ERR_OK) {
+            fprintf(stderr, "[arm] unable to map code range %08x-%08x\n", lo, hi);
+        }
+    }
+}
+
+void arm_emu_set_image(uint32_t start, uint32_t end) {
+    g_image_start = start;
+    g_image_end = end;
+    arm_emu_register_code(start, end - start);
+}
 
 static void *status_thread(void *arg) {
     (void)arg;
@@ -45,54 +157,66 @@ static void *status_thread(void *arg) {
         struct timespec ts = {2, 0};
         nanosleep(&ts, NULL);
         unsigned long now = g_host_calls;
-        Dl_info info;
         uint32_t last = g_last_target;
-        const char *name = dladdr((void *)(uintptr_t)last, &info) && info.dli_sname ? info.dli_sname
-                                                                                  : "?";
-        uint32_t pc = 0, lr = 0;
+        const char *name = plat_symbol_name((void *)(uintptr_t)last);
+        name = name ? name : "?";
+        uint32_t pc = 0, lr = 0, regions = 0;
         uc_engine *uc = g_main_uc;
         if (uc) {
+            uc_mem_region *list = NULL;
             uc_reg_read(uc, UC_ARM_REG_PC, &pc);
             uc_reg_read(uc, UC_ARM_REG_LR, &lr);
+            if (uc_mem_regions(uc, &list, &regions) == UC_ERR_OK) {
+                uc_free(list);
+            }
         }
-        fprintf(stderr, "[status] host calls %lu (+%lu/2s) last=%s main pc=%08x lr=%08x\n", now,
-                now - previous, name, pc, lr);
+        static size_t last_flushes, last_notdirty, last_fills;
+        size_t flushes = uc_debug_full_flushes, notdirty = uc_debug_notdirty_writes,
+               fills = uc_debug_tlb_fills;
+        fprintf(stderr,
+                "[status] host calls %lu (+%lu/2s) last=%s@%08x main pc=%08x lr=%08x maps=%u "
+                "tlb: +%zu fills +%zu flushes +%zu notdirty\n",
+                now, now - previous, name, last, pc, lr, regions, fills - last_fills,
+                flushes - last_flushes, notdirty - last_notdirty);
+        last_flushes = flushes;
+        last_notdirty = notdirty;
+        last_fills = fills;
+        if (g_trace_code) {
+            report_code_pages();
+        }
         previous = now;
     }
     return NULL;
 }
 
-static void trace_call(uint32_t target, const uint32_t *a, uint32_t lr) {
-    unsigned long n = ++g_host_calls;
-    g_last_target = target;
-    if (g_trace_limit <= 0 || (long)++g_traced > g_trace_limit) {
-        return;
+static uint32_t g_trace_ignored[8];
+static unsigned g_trace_ignored_count;
+
+void arm_emu_trace_ignore(uint32_t fn) {
+    if (g_trace_ignored_count < sizeof(g_trace_ignored) / sizeof(g_trace_ignored[0])) {
+        g_trace_ignored[g_trace_ignored_count++] = fn;
     }
-    Dl_info info;
-    const char *name = dladdr((void *)(uintptr_t)target, &info) && info.dli_sname ? info.dli_sname
-                                                                                    : "?";
-    fprintf(stderr, "[call %lu] %s(%08x, %08x, %08x, %08x) from %08x\n", n, name, a[0], a[1], a[2],
-            a[3], lr);
 }
 
-static bool find_host_vma(uint32_t address, uint64_t *start, uint64_t *end) {
-    FILE *maps = fopen("/proc/self/maps", "r");
-    if (!maps) {
+static bool trace_call(uint32_t target) {
+    ++g_host_calls;
+    g_last_target = target;
+    if (g_trace_limit <= 0) {
         return false;
     }
-    char line[512];
-    bool found = false;
-    while (fgets(line, sizeof(line), maps)) {
-        unsigned long long lo, hi;
-        if (sscanf(line, "%llx-%llx", &lo, &hi) == 2 && address >= lo && address < hi) {
-            *start = lo;
-            *end = hi;
-            found = true;
-            break;
+    for (unsigned i = 0; i < g_trace_ignored_count; ++i) {
+        if (g_trace_ignored[i] == target) {
+            return false;
         }
     }
-    fclose(maps);
-    return found;
+    return (long)++g_traced <= g_trace_limit;
+}
+
+static void trace_result(uint32_t target, const uint32_t *a, uint32_t lr, uint64_t result) {
+    const char *name = plat_symbol_name((void *)(uintptr_t)target);
+    fprintf(stderr, "[call %lu] %s@%08x(%08x, %08x, %08x, %08x) from %08x -> %08x\n",
+            (unsigned long)g_traced, name ? name : "?", target, a[0], a[1], a[2], a[3], lr,
+            (uint32_t)result);
 }
 
 static void clip_to_unmapped(uc_engine *uc, uint32_t address, uint64_t *lo, uint64_t *hi) {
@@ -113,8 +237,8 @@ static void clip_to_unmapped(uc_engine *uc, uint32_t address, uint64_t *lo, uint
 }
 
 static void *svc_shadow(size_t size) {
-    uint32_t *shadow = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (shadow == MAP_FAILED) {
+    uint32_t *shadow = plat_alloc(NULL, size, false);
+    if (!shadow) {
         return NULL;
     }
     for (size_t i = 0; i < size / sizeof(uint32_t); ++i) {
@@ -123,10 +247,6 @@ static void *svc_shadow(size_t size) {
     return shadow;
 }
 
-static bool host_code_address(uint32_t address) {
-    Dl_info info;
-    return dladdr((void *)(uintptr_t)address, &info) != 0 && info.dli_fbase != NULL;
-}
 
 static void report_fault(uc_engine *uc, const char *what, uint64_t address) {
     uint32_t r[16];
@@ -152,17 +272,25 @@ static bool on_unmapped(uc_engine *uc, uc_mem_type type, uint64_t address, int s
     (void)value;
     (void)user_data;
     uint64_t lo, hi;
-    if ((uint32_t)address >= PAGE_SIZE_EMU && find_host_vma((uint32_t)address, &lo, &hi)) {
+    bool fetch = type == UC_MEM_FETCH_UNMAPPED;
+    bool host_code = fetch && host_code_address((uint32_t)address);
+    bool found = fetch ? plat_region((uintptr_t)address, &lo, &hi)
+                       : plat_data_window((uintptr_t)address, &lo, &hi);
+    if ((uint32_t)address >= PAGE_SIZE_EMU && found) {
         clip_to_unmapped(uc, (uint32_t)address, &lo, &hi);
         size_t length = (size_t)(hi - lo);
-        if (type == UC_MEM_FETCH_UNMAPPED && host_code_address((uint32_t)address)) {
+        if (host_code) {
             void *shadow = svc_shadow(length);
             if (shadow && uc_mem_map_ptr(uc, lo, length, UC_PROT_READ | UC_PROT_EXEC, shadow) ==
                               UC_ERR_OK) {
                 return true;
             }
-        } else if (uc_mem_map_ptr(uc, lo, length, UC_PROT_ALL, (void *)(uintptr_t)lo) == UC_ERR_OK) {
-            return true;
+        } else {
+            uint32_t perms = type == UC_MEM_FETCH_UNMAPPED ? UC_PROT_ALL
+                                                           : UC_PROT_READ | UC_PROT_WRITE;
+            if (uc_mem_map_ptr(uc, lo, length, perms, (void *)(uintptr_t)lo) == UC_ERR_OK) {
+                return true;
+            }
         }
     }
     report_fault(uc, type == UC_MEM_WRITE_UNMAPPED ? "write to unmapped" : type == UC_MEM_FETCH_UNMAPPED ? "fetch from unmapped" : "read from unmapped",
@@ -184,6 +312,7 @@ static void on_interrupt(uc_engine *uc, uint32_t intno, void *user_data) {
 
     uint32_t a[HOST_ARG_WORDS];
     uint32_t sp, lr;
+    uc_reg_read(uc, UC_ARM_REG_R12, &t_call_scratch);
     uc_reg_read(uc, UC_ARM_REG_R0, &a[0]);
     uc_reg_read(uc, UC_ARM_REG_R1, &a[1]);
     uc_reg_read(uc, UC_ARM_REG_R2, &a[2]);
@@ -195,13 +324,14 @@ static void on_interrupt(uc_engine *uc, uint32_t intno, void *user_data) {
         a[i] = stack[i - 4];
     }
 
-    trace_call(target, a, lr);
+    bool traced = trace_call(target);
     if (g_main_uc == NULL) {
         g_main_uc = uc;
     }
-    host_fn16 fn = (host_fn16)(uintptr_t)target;
-    uint64_t result = fn(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9], a[10],
-                         a[11], a[12], a[13], a[14], a[15]);
+    uint64_t result = call_host16(target, a);
+    if (traced) {
+        trace_result(target, a, lr, result);
+    }
 
     uint32_t lo = (uint32_t)result;
     uint32_t hi = (uint32_t)(result >> 32);
@@ -226,12 +356,17 @@ static struct arm_emu *emu_create(void) {
     uc_reg_write(emu->uc, UC_ARM_REG_C1_C0_2, &cpacr);
     uc_reg_write(emu->uc, UC_ARM_REG_FPEXC, &fpexc);
 
+    map_code_ranges(emu->uc);
+
     uc_hook hook;
     uc_hook_add(emu->uc, &hook, UC_HOOK_MEM_UNMAPPED, (void *)on_unmapped, NULL, 1, 0);
     uc_hook_add(emu->uc, &hook, UC_HOOK_INTR, (void *)on_interrupt, NULL, 1, 0);
+    if (g_trace_code) {
+        uc_hook_add(emu->uc, &hook, UC_HOOK_BLOCK, (void *)on_block, NULL, 1, 0);
+    }
 
-    emu->stack = mmap(NULL, STACK_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (emu->stack == MAP_FAILED) {
+    emu->stack = plat_alloc(NULL, STACK_SIZE, false);
+    if (!emu->stack) {
         uc_close(emu->uc);
         free(emu);
         return NULL;
@@ -246,14 +381,16 @@ bool arm_emu_init(void) {
     if (g_svc_page) {
         return true;
     }
-    void *page = mmap(NULL, PAGE_SIZE_EMU, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (page == MAP_FAILED) {
-        fprintf(stderr, "[arm] svc page: %s\n", strerror(errno));
+    void *page = plat_alloc(NULL, PAGE_SIZE_EMU, false);
+    if (!page) {
+        fprintf(stderr, "[arm] unable to allocate the svc page\n");
         return false;
     }
     g_svc_page = page;
+    arm_emu_register_code((uint32_t)(uintptr_t)page, PAGE_SIZE_EMU);
     const char *trace = getenv("BOZ_TRACE_CALLS");
     g_trace_limit = trace ? strtol(trace, NULL, 10) : 0;
+    g_trace_code = getenv("BOZ_TRACE_CODE") != NULL;
     if (getenv("BOZ_TRACE_STATUS")) {
         pthread_t thread;
         pthread_create(&thread, NULL, status_thread, NULL);
@@ -319,12 +456,20 @@ uint64_t arm_emu_call(uint32_t fn, int argc, const uint32_t *argv) {
     return ((uint64_t)hi << 32) | lo;
 }
 
+uint32_t arm_emu_call_scratch(void) {
+    return t_call_scratch;
+}
+
+uint64_t arm_emu_call_host(uint32_t fn, const uint32_t *args) {
+    return call_host16(fn, args);
+}
+
 void arm_emu_thread_exit(void) {
     if (!t_emu) {
         return;
     }
     uc_close(t_emu->uc);
-    munmap(t_emu->stack, STACK_SIZE);
+    plat_free(t_emu->stack, STACK_SIZE);
     free(t_emu);
     t_emu = NULL;
 }

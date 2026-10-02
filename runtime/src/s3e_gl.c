@@ -2,43 +2,43 @@
 
 #define GL_WRAP_FLOAT1(name, t1)                                                                   \
     static S3E_SOFTFP void host_##name(t1 a) {                                                     \
-        void (*real)(t1) = lookup_gl(#name);                                                       \
+        void (GL_APIENTRY *real)(t1) = lookup_gl(#name);                                                       \
         if (real)                                                                                  \
             real(a);                                                                               \
     }
 #define GL_WRAP_FLOAT2(name, t1, t2)                                                               \
     static S3E_SOFTFP void host_##name(t1 a, t2 b) {                                               \
-        void (*real)(t1, t2) = lookup_gl(#name);                                                   \
+        void (GL_APIENTRY *real)(t1, t2) = lookup_gl(#name);                                                   \
         if (real)                                                                                  \
             real(a, b);                                                                            \
     }
 #define GL_WRAP_FLOAT3(name, t1, t2, t3)                                                           \
     static S3E_SOFTFP void host_##name(t1 a, t2 b, t3 c) {                                         \
-        void (*real)(t1, t2, t3) = lookup_gl(#name);                                               \
+        void (GL_APIENTRY *real)(t1, t2, t3) = lookup_gl(#name);                                               \
         if (real)                                                                                  \
             real(a, b, c);                                                                         \
     }
 #define GL_WRAP_FLOAT4(name, t1, t2, t3, t4)                                                       \
     static S3E_SOFTFP void host_##name(t1 a, t2 b, t3 c, t4 d) {                                   \
-        void (*real)(t1, t2, t3, t4) = lookup_gl(#name);                                           \
+        void (GL_APIENTRY *real)(t1, t2, t3, t4) = lookup_gl(#name);                                           \
         if (real)                                                                                  \
             real(a, b, c, d);                                                                      \
     }
 #define GL_WRAP_FLOAT5(name, t1, t2, t3, t4, t5)                                                   \
     static S3E_SOFTFP void host_##name(t1 a, t2 b, t3 c, t4 d, t5 e) {                             \
-        void (*real)(t1, t2, t3, t4, t5) = lookup_gl(#name);                                       \
+        void (GL_APIENTRY *real)(t1, t2, t3, t4, t5) = lookup_gl(#name);                                       \
         if (real)                                                                                  \
             real(a, b, c, d, e);                                                                   \
     }
 #define GL_WRAP_FLOAT6(name, t1, t2, t3, t4, t5, t6)                                               \
     static S3E_SOFTFP void host_##name(t1 a, t2 b, t3 c, t4 d, t5 e, t6 f) {                       \
-        void (*real)(t1, t2, t3, t4, t5, t6) = lookup_gl(#name);                                   \
+        void (GL_APIENTRY *real)(t1, t2, t3, t4, t5, t6) = lookup_gl(#name);                                   \
         if (real)                                                                                  \
             real(a, b, c, d, e, f);                                                                \
     }
 #define GL_WRAP_FLOAT1_ALIAS(name, fallback, t1)                                                   \
     static S3E_SOFTFP void host_##name(t1 a) {                                                     \
-        void (*real)(t1) = lookup_gl(#name);                                                       \
+        void (GL_APIENTRY *real)(t1) = lookup_gl(#name);                                                       \
         if (!real)                                                                                 \
             real = lookup_gl(#fallback);                                                           \
         if (real)                                                                                  \
@@ -46,7 +46,7 @@
     }
 #define GL_WRAP_FLOAT2_ALIAS(name, fallback, t1, t2)                                               \
     static S3E_SOFTFP void host_##name(t1 a, t2 b) {                                               \
-        void (*real)(t1, t2) = lookup_gl(#name);                                                   \
+        void (GL_APIENTRY *real)(t1, t2) = lookup_gl(#name);                                                   \
         if (!real)                                                                                 \
             real = lookup_gl(#fallback);                                                           \
         if (real)                                                                                  \
@@ -54,7 +54,7 @@
     }
 #define GL_WRAP_FLOAT6_ALIAS(name, fallback, t1, t2, t3, t4, t5, t6)                               \
     static S3E_SOFTFP void host_##name(t1 a, t2 b, t3 c, t4 d, t5 e, t6 f) {                       \
-        void (*real)(t1, t2, t3, t4, t5, t6) = lookup_gl(#name);                                   \
+        void (GL_APIENTRY *real)(t1, t2, t3, t4, t5, t6) = lookup_gl(#name);                                   \
         if (!real)                                                                                 \
             real = lookup_gl(#fallback);                                                           \
         if (real)                                                                                  \
@@ -94,7 +94,7 @@ static GLuint g_scale_fbo;
 static int g_scale_state;
 
 static void raw_bind_framebuffer(GLenum target, GLuint framebuffer) {
-    void (*real)(GLenum, GLuint) = lookup_gl("glBindFramebuffer");
+    void (GL_APIENTRY *real)(GLenum, GLuint) = lookup_gl("glBindFramebuffer");
     if (!real) {
         real = lookup_gl("glBindFramebufferOES");
     }
@@ -114,12 +114,12 @@ static int scale_ready(void) {
     if (getenv("BOZ_NO_SCALE")) {
         return 0;
     }
-    void (*gen_fb)(GLsizei, GLuint *) = lookup_gl("glGenFramebuffers");
-    void (*gen_rb)(GLsizei, GLuint *) = lookup_gl("glGenRenderbuffers");
-    void (*bind_rb)(GLenum, GLuint) = lookup_gl("glBindRenderbuffer");
-    void (*storage)(GLenum, GLenum, GLsizei, GLsizei) = lookup_gl("glRenderbufferStorage");
-    void (*attach)(GLenum, GLenum, GLenum, GLuint) = lookup_gl("glFramebufferRenderbuffer");
-    GLenum (*status)(GLenum) = lookup_gl("glCheckFramebufferStatus");
+    void (GL_APIENTRY *gen_fb)(GLsizei, GLuint *) = lookup_gl("glGenFramebuffers");
+    void (GL_APIENTRY *gen_rb)(GLsizei, GLuint *) = lookup_gl("glGenRenderbuffers");
+    void (GL_APIENTRY *bind_rb)(GLenum, GLuint) = lookup_gl("glBindRenderbuffer");
+    void (GL_APIENTRY *storage)(GLenum, GLenum, GLsizei, GLsizei) = lookup_gl("glRenderbufferStorage");
+    void (GL_APIENTRY *attach)(GLenum, GLenum, GLenum, GLuint) = lookup_gl("glFramebufferRenderbuffer");
+    GLenum (GL_APIENTRY *status)(GLenum) = lookup_gl("glCheckFramebufferStatus");
     if (!gen_fb || !gen_rb || !bind_rb || !storage || !attach || !status ||
         !lookup_gl("glBlitFramebuffer")) {
         fprintf(stderr, "[gl] window scaling unavailable: missing framebuffer functions\n");
@@ -177,16 +177,16 @@ static void scale_present(void) {
     if (g_scale_state <= 0 || !egl_backend_drawable_size(&width, &height)) {
         return;
     }
-    void (*blit)(GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum) =
+    void (GL_APIENTRY *blit)(GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum) =
         lookup_gl("glBlitFramebuffer");
-    void (*get_b)(GLenum, GLboolean *) = lookup_gl("glGetBooleanv");
-    void (*get_f)(GLenum, GLfloat *) = lookup_gl("glGetFloatv");
-    GLboolean (*is_enabled)(GLenum) = lookup_gl("glIsEnabled");
-    void (*enable)(GLenum) = lookup_gl("glEnable");
-    void (*disable)(GLenum) = lookup_gl("glDisable");
-    void (*clear_color)(GLfloat, GLfloat, GLfloat, GLfloat) = lookup_gl("glClearColor");
-    void (*color_mask)(GLboolean, GLboolean, GLboolean, GLboolean) = lookup_gl("glColorMask");
-    void (*clear)(GLbitfield) = lookup_gl("glClear");
+    void (GL_APIENTRY *get_b)(GLenum, GLboolean *) = lookup_gl("glGetBooleanv");
+    void (GL_APIENTRY *get_f)(GLenum, GLfloat *) = lookup_gl("glGetFloatv");
+    GLboolean (GL_APIENTRY *is_enabled)(GLenum) = lookup_gl("glIsEnabled");
+    void (GL_APIENTRY *enable)(GLenum) = lookup_gl("glEnable");
+    void (GL_APIENTRY *disable)(GLenum) = lookup_gl("glDisable");
+    void (GL_APIENTRY *clear_color)(GLfloat, GLfloat, GLfloat, GLfloat) = lookup_gl("glClearColor");
+    void (GL_APIENTRY *color_mask)(GLboolean, GLboolean, GLboolean, GLboolean) = lookup_gl("glColorMask");
+    void (GL_APIENTRY *clear)(GLbitfield) = lookup_gl("glClear");
     if (!blit || !get_b || !get_f || !is_enabled || !enable || !disable || !clear_color ||
         !color_mask || !clear) {
         return;
@@ -227,13 +227,7 @@ static void sleep_until_us(uint64_t target_us) {
         if (now >= target_us) {
             return;
         }
-        uint64_t remaining = target_us - now;
-        struct timespec req = {
-            .tv_sec = (time_t)(remaining / 1000000u),
-            .tv_nsec = (long)(remaining % 1000000u) * 1000L,
-        };
-        while (nanosleep(&req, &req) != 0 && errno == EINTR) {
-        }
+        plat_sleep_us(target_us - now);
     }
 }
 
@@ -287,7 +281,7 @@ static void bind_framebuffer(GLenum target, GLuint framebuffer) {
         return;
     }
 
-    void (*real)(GLenum, GLuint) = lookup_gl("glBindFramebuffer");
+    void (GL_APIENTRY *real)(GLenum, GLuint) = lookup_gl("glBindFramebuffer");
     if (!real) {
         real = lookup_gl("glBindFramebufferOES");
     }
@@ -305,7 +299,7 @@ static S3E_SOFTFP void host_glBindFramebufferOES(GLenum target, GLuint framebuff
 }
 
 static S3E_SOFTFP void host_glViewport(GLint x, GLint y, GLsizei width, GLsizei height) {
-    void (*real)(GLint, GLint, GLsizei, GLsizei) = lookup_gl("glViewport");
+    void (GL_APIENTRY *real)(GLint, GLint, GLsizei, GLsizei) = lookup_gl("glViewport");
     if (!g_bound_framebuffer && !g_scale_state && scale_ready()) {
         driver_bind_framebuffer(0);
     }
@@ -319,7 +313,7 @@ static S3E_SOFTFP void host_glViewport(GLint x, GLint y, GLsizei width, GLsizei 
 }
 
 static S3E_SOFTFP void host_glScissor(GLint x, GLint y, GLsizei width, GLsizei height) {
-    void (*real)(GLint, GLint, GLsizei, GLsizei) = lookup_gl("glScissor");
+    void (GL_APIENTRY *real)(GLint, GLint, GLsizei, GLsizei) = lookup_gl("glScissor");
     if (real) {
         if (surface_offsets_apply()) {
             x += g_surface.x;
@@ -355,7 +349,7 @@ static void map_drawable_rect_to_surface(GLint *rect) {
 }
 
 static S3E_SOFTFP void host_glGetIntegerv(GLenum name, GLint *values) {
-    void (*real)(GLenum, GLint *) = lookup_gl("glGetIntegerv");
+    void (GL_APIENTRY *real)(GLenum, GLint *) = lookup_gl("glGetIntegerv");
     if (!real) {
         return;
     }
@@ -372,7 +366,7 @@ static S3E_SOFTFP void host_glGetIntegerv(GLenum name, GLint *values) {
 
 static S3E_SOFTFP void host_glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height,
                                          GLenum format, GLenum type, void *pixels) {
-    void (*real)(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void *) =
+    void (GL_APIENTRY *real)(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, void *) =
         lookup_gl("glReadPixels");
     if (real) {
         if (surface_offsets_apply()) {
@@ -386,7 +380,7 @@ static S3E_SOFTFP void host_glReadPixels(GLint x, GLint y, GLsizei width, GLsize
 static S3E_SOFTFP void host_glCopyTexImage2D(GLenum target, GLint level, GLenum internal_format,
                                              GLint x, GLint y, GLsizei width, GLsizei height,
                                              GLint border) {
-    void (*real)(GLenum, GLint, GLenum, GLint, GLint, GLsizei, GLsizei, GLint) =
+    void (GL_APIENTRY *real)(GLenum, GLint, GLenum, GLint, GLint, GLsizei, GLsizei, GLint) =
         lookup_gl("glCopyTexImage2D");
     if (real) {
         if (surface_offsets_apply()) {
@@ -400,7 +394,7 @@ static S3E_SOFTFP void host_glCopyTexImage2D(GLenum target, GLint level, GLenum 
 static S3E_SOFTFP void host_glCopyTexSubImage2D(GLenum target, GLint level, GLint x_offset,
                                                 GLint y_offset, GLint x, GLint y, GLsizei width,
                                                 GLsizei height) {
-    void (*real)(GLenum, GLint, GLint, GLint, GLint, GLint, GLsizei, GLsizei) =
+    void (GL_APIENTRY *real)(GLenum, GLint, GLint, GLint, GLint, GLint, GLsizei, GLsizei) =
         lookup_gl("glCopyTexSubImage2D");
     if (real) {
         if (surface_offsets_apply()) {
@@ -431,8 +425,8 @@ static void *host_eglGetProcAddress(const char *procname) {
 }
 
 static void cursor_clear_rect(GLint x, GLint y, GLsizei w, GLsizei h,
-                              void (*gl_scissor)(GLint, GLint, GLsizei, GLsizei),
-                              void (*gl_clear)(GLbitfield)) {
+                              void (GL_APIENTRY *gl_scissor)(GLint, GLint, GLsizei, GLsizei),
+                              void (GL_APIENTRY *gl_clear)(GLbitfield)) {
     if (w <= 0 || h <= 0) {
         return;
     }
@@ -468,8 +462,8 @@ static int cursor_scaled_size(int size) {
 }
 
 static void clear_letterbox_rect(GLint x, GLint y, GLsizei width, GLsizei height,
-                                 void (*gl_scissor)(GLint, GLint, GLsizei, GLsizei),
-                                 void (*gl_clear)(GLbitfield)) {
+                                 void (GL_APIENTRY *gl_scissor)(GLint, GLint, GLsizei, GLsizei),
+                                 void (GL_APIENTRY *gl_clear)(GLbitfield)) {
     if (width > 0 && height > 0) {
         gl_scissor(x, y, width, height);
         gl_clear(GL_COLOR_BUFFER_BIT_VALUE);
@@ -482,16 +476,16 @@ static void frontend_overlay_gl_present(void) {
         return;
     }
 
-    void (*gl_disable)(GLenum) = lookup_gl("glDisable");
-    void (*gl_enable)(GLenum) = lookup_gl("glEnable");
-    GLboolean (*gl_is_enabled)(GLenum) = lookup_gl("glIsEnabled");
-    void (*gl_scissor)(GLint, GLint, GLsizei, GLsizei) = lookup_gl("glScissor");
-    void (*gl_clear_color)(GLfloat, GLfloat, GLfloat, GLfloat) = lookup_gl("glClearColor");
-    void (*gl_clear)(GLbitfield) = lookup_gl("glClear");
-    void (*gl_get_integerv)(GLenum, GLint *) = lookup_gl("glGetIntegerv");
-    void (*gl_get_floatv)(GLenum, GLfloat *) = lookup_gl("glGetFloatv");
-    void (*gl_get_booleanv)(GLenum, GLboolean *) = lookup_gl("glGetBooleanv");
-    void (*gl_color_mask)(GLboolean, GLboolean, GLboolean, GLboolean) = lookup_gl("glColorMask");
+    void (GL_APIENTRY *gl_disable)(GLenum) = lookup_gl("glDisable");
+    void (GL_APIENTRY *gl_enable)(GLenum) = lookup_gl("glEnable");
+    GLboolean (GL_APIENTRY *gl_is_enabled)(GLenum) = lookup_gl("glIsEnabled");
+    void (GL_APIENTRY *gl_scissor)(GLint, GLint, GLsizei, GLsizei) = lookup_gl("glScissor");
+    void (GL_APIENTRY *gl_clear_color)(GLfloat, GLfloat, GLfloat, GLfloat) = lookup_gl("glClearColor");
+    void (GL_APIENTRY *gl_clear)(GLbitfield) = lookup_gl("glClear");
+    void (GL_APIENTRY *gl_get_integerv)(GLenum, GLint *) = lookup_gl("glGetIntegerv");
+    void (GL_APIENTRY *gl_get_floatv)(GLenum, GLfloat *) = lookup_gl("glGetFloatv");
+    void (GL_APIENTRY *gl_get_booleanv)(GLenum, GLboolean *) = lookup_gl("glGetBooleanv");
+    void (GL_APIENTRY *gl_color_mask)(GLboolean, GLboolean, GLboolean, GLboolean) = lookup_gl("glColorMask");
     if (!gl_disable || !gl_enable || !gl_is_enabled || !gl_scissor || !gl_clear_color ||
         !gl_clear || !gl_get_integerv || !gl_get_floatv || !gl_get_booleanv || !gl_color_mask) {
         return;
@@ -797,8 +791,13 @@ void *s3e_host_resolve(const char *symbol) {
         return addr ? addr : make_stub(symbol);
     }
     if (strncmp(symbol, "gl", 2) == 0) {
+#if defined(__arm__)
         void *addr = lookup_gl(symbol);
         return addr ? addr : make_stub(symbol);
+#else
+        void *addr = getenv("BOZ_LAZY_GL") ? NULL : lookup_gl(symbol);
+        return addr ? addr : make_lazy_gl_stub(symbol);
+#endif
     }
     for (size_t i = 0; i < sizeof(HOST_SYMBOLS) / sizeof(HOST_SYMBOLS[0]); ++i) {
         if (strcmp(symbol, HOST_SYMBOLS[i].name) == 0) {

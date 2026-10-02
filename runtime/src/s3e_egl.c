@@ -4,7 +4,7 @@
 
 enum {
     SDL_INIT_VIDEO = 0x00000020u,
-    SDL_WINDOW_FULLSCREEN = 0x00000001u,
+    SDL_WINDOW_FULLSCREEN_DESKTOP = 0x00001001u,
     SDL_WINDOW_OPENGL = 0x00000002u,
     SDL_WINDOW_SHOWN = 0x00000004u,
     SDL_WINDOWPOS_UNDEFINED = 0x1fff0000u,
@@ -122,26 +122,30 @@ static void set_error(EGLint error) {
 }
 
 static int load_symbol(void **target, const char *name) {
-    *target = dlsym(g_sdl.library, name);
+    *target = plat_lib_symbol(g_sdl.library, name);
     return *target != NULL;
 }
 
 static int find_sdl_sibling_library(const char *const *names, char *path, size_t path_size) {
-    void *anchor = dlsym(g_sdl.library, "SDL_InitSubSystem");
-    Dl_info info;
-    if (!anchor || dladdr(anchor, &info) == 0 || !info.dli_fname) {
+    void *anchor = plat_lib_symbol(g_sdl.library, "SDL_InitSubSystem");
+    char library_path[PATH_MAX];
+    if (!anchor || !plat_lib_path(anchor, library_path, sizeof(library_path))) {
         return 0;
     }
 
-    const char *separator = strrchr(info.dli_fname, '/');
+    const char *separator = strrchr(library_path, '/');
+    const char *backslash = strrchr(library_path, '\\');
+    if (backslash && (!separator || backslash > separator)) {
+        separator = backslash;
+    }
     if (!separator) {
         return 0;
     }
 
-    size_t directory_length = (size_t)(separator - info.dli_fname);
+    size_t directory_length = (size_t)(separator - library_path);
     for (size_t i = 0; names[i]; ++i) {
         int length =
-            snprintf(path, path_size, "%.*s/%s", (int)directory_length, info.dli_fname, names[i]);
+            snprintf(path, path_size, "%.*s/%s", (int)directory_length, library_path, names[i]);
         if (length > 0 && (size_t)length < path_size && access(path, R_OK) == 0) {
             return 1;
         }
@@ -162,10 +166,17 @@ static void set_sdl_sibling_library(const char *variable, const char *const *nam
 }
 
 static void configure_sdl_graphics_libraries(void) {
-    const char *egl_names[] = {"libEGL.so.1", "libEGL.so", NULL};
-    const char *gles_names[] = {"libGLESv2.so.2", "libGLESv2.so", NULL};
+#if defined(_WIN32)
+    /* Mesa's EGL cannot create window surfaces on Windows, so SDL uses Mesa's WGL driver and
+     * ensure_context() creates the OpenGL ES context through WGL_EXT_create_context_es_profile. */
+    const char *wgl_names[] = {"opengl32.dll", NULL};
+    set_sdl_sibling_library("SDL_VIDEO_GL_DRIVER", wgl_names);
+#else
+    const char *egl_names[] = {BOZ_LIB_EGL, NULL};
+    const char *gles_names[] = {BOZ_LIB_GLES2, NULL};
     set_sdl_sibling_library("SDL_VIDEO_EGL_DRIVER", egl_names);
     set_sdl_sibling_library("SDL_VIDEO_GL_DRIVER", gles_names);
+#endif
 }
 
 static int load_sdl_video(void) {
@@ -173,7 +184,7 @@ static int load_sdl_video(void) {
         return 1;
     }
 
-    const char *libraries[] = {"libSDL2-2.0.so.0", "libSDL2.so", NULL};
+    const char *libraries[] = {BOZ_LIB_SDL2, NULL};
     g_sdl.library = open_first(libraries);
     if (!g_sdl.library) {
         return 0;
@@ -194,7 +205,7 @@ static int load_sdl_video(void) {
     ok &= load_symbol((void **)&g_sdl.api.GetError, "SDL_GetError");
     load_symbol((void **)&g_sdl.api.GetCurrentVideoDriver, "SDL_GetCurrentVideoDriver");
     if (!ok) {
-        dlclose(g_sdl.library);
+        plat_lib_close(g_sdl.library);
         memset(&g_sdl.api, 0, sizeof(g_sdl.api));
         g_sdl.library = NULL;
     }
@@ -202,10 +213,10 @@ static int load_sdl_video(void) {
 }
 
 static void *try_graphics_library(const char *path, char *error, size_t error_size) {
-    dlerror();
-    void *library = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    plat_lib_error();
+    void *library = plat_lib_open(path);
     if (!library && !error[0]) {
-        const char *reason = dlerror();
+        const char *reason = plat_lib_error();
         snprintf(error, error_size, "%s: %s", path, reason ? reason : "unknown error");
     }
     return library;
@@ -238,9 +249,15 @@ static void *open_graphics_library(const char *configured, const char *const *si
 }
 
 bool egl_backend_load_libraries(void) {
+#if defined(_WIN32)
+    const char *egl_names[] = {"libEGL.dll", NULL};
+    const char *gles1_names[] = {"libGLESv1_CM.dll", NULL};
+    const char *gles2_names[] = {"libGLESv2.dll", NULL};
+#else
     const char *egl_names[] = {"libEGL.so.1", "libEGL.so", "libmali.so", NULL};
     const char *gles1_names[] = {"libGLESv1_CM.so.1", "libGLESv1_CM.so", "libmali.so", NULL};
     const char *gles2_names[] = {"libGLESv2.so.2", "libGLESv2.so", "libmali.so", NULL};
+#endif
     char egl_error[512];
     char gles1_error[512];
     char gles2_error[512];
@@ -255,12 +272,24 @@ bool egl_backend_load_libraries(void) {
                                   sizeof(egl_error));
     g_gles1 =
         open_graphics_library(NULL, gles1_names, gles1_names, gles1_error, sizeof(gles1_error));
-    g_gles2 = open_graphics_library(getenv("SDL_VIDEO_GL_DRIVER"), gles2_names, gles2_names,
-                                    gles2_error, sizeof(gles2_error));
+#if defined(_WIN32)
+    const char *gles2_configured = NULL;
+#else
+    const char *gles2_configured = getenv("SDL_VIDEO_GL_DRIVER");
+#endif
+    g_gles2 = open_graphics_library(gles2_configured, gles2_names, gles2_names, gles2_error,
+                                    sizeof(gles2_error));
     if (g_egl && g_gles2 && !g_gles1) {
         fprintf(stderr, "[egl] OpenGL ES 1 library unavailable, resolving through EGL: %s\n",
                 gles1_error);
     }
+#if defined(_WIN32)
+    if (!g_egl || !g_gles2) {
+        fprintf(stderr, "[egl] ANGLE not found next to the executable; using the system OpenGL ES "
+                        "driver through SDL\n");
+        return true;
+    }
+#endif
     if (!g_egl || !g_gles2) {
         if (!g_egl) {
             fprintf(stderr, "[egl] EGL load failed: %s\n", egl_error);
@@ -270,15 +299,15 @@ bool egl_backend_load_libraries(void) {
         }
         fprintf(stderr, "[egl] compatible EGL and OpenGL ES libraries are required\n");
         if (g_egl) {
-            dlclose(g_egl);
+            plat_lib_close(g_egl);
             g_egl = NULL;
         }
         if (g_gles1) {
-            dlclose(g_gles1);
+            plat_lib_close(g_gles1);
             g_gles1 = NULL;
         }
         if (g_gles2) {
-            dlclose(g_gles2);
+            plat_lib_close(g_gles2);
             g_gles2 = NULL;
         }
         egl_backend_shutdown();
@@ -316,6 +345,10 @@ static int uses_sdl(EGLDisplay display) {
 }
 
 static int sdl_owns_display(void) {
+#if defined(_WIN32)
+    /* There is no headless native EGL window on Windows; SDL always owns the window. */
+    return 1;
+#endif
     const char *wayland_display = getenv("WAYLAND_DISPLAY");
     const char *x11_display = getenv("DISPLAY");
     const char *video_driver = getenv("SDL_VIDEODRIVER");
@@ -324,9 +357,16 @@ static int sdl_owns_display(void) {
 }
 
 static void apply_window_attributes(void) {
+#if defined(_WIN32)
+    /* SDL only offers WGL for desktop profiles; see create_wgl_es_context(). */
+    g_sdl.api.GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, 0);
+    g_sdl.api.GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+    g_sdl.api.GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
+#else
     g_sdl.api.GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
     g_sdl.api.GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, g_sdl.context_major);
     g_sdl.api.GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+#endif
     g_sdl.api.GL_SetAttribute(SDL_GL_RED_SIZE, g_sdl.red_size);
     g_sdl.api.GL_SetAttribute(SDL_GL_GREEN_SIZE, g_sdl.green_size);
     g_sdl.api.GL_SetAttribute(SDL_GL_BLUE_SIZE, g_sdl.blue_size);
@@ -347,15 +387,66 @@ static int ensure_window(void) {
         SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN |
             (getenv("BOZ_WINDOWED") && strcmp(getenv("BOZ_WINDOWED"), "0") != 0
                  ? 0x20u
-                 : (uint32_t)SDL_WINDOW_FULLSCREEN));
+                 : (uint32_t)SDL_WINDOW_FULLSCREEN_DESKTOP));
     if (!g_sdl.window) {
+        static int failures;
         fprintf(stderr, "[egl] SDL window creation failed: %s\n", sdl_error());
+        if (++failures >= 5) {
+            fprintf(stderr, "[egl] unable to create an OpenGL ES window; check the graphics driver "
+                            "or that the bundled Mesa DLLs are next to the executable\n");
+            _Exit(1);
+        }
         set_error(EGL_BAD_NATIVE_WINDOW);
         return 0;
     }
     fprintf(stderr, "[egl] SDL window size=%ux%u\n", g_native_window.width, g_native_window.height);
     return 1;
 }
+
+#if defined(_WIN32)
+#define WGL_CONTEXT_MAJOR_VERSION_ARB 0x2091
+#define WGL_CONTEXT_MINOR_VERSION_ARB 0x2092
+#define WGL_CONTEXT_PROFILE_MASK_ARB 0x9126
+#define WGL_CONTEXT_ES_PROFILE_BIT_EXT 0x0004
+
+/* SDL refuses WGL for OpenGL ES 1 and would fall back to EGL, which Mesa cannot do on Windows.
+ * SDL's desktop context gives the window its pixel format and makes the DC current; the ES
+ * context is then created on that DC. SDL's WGL make-current, swap and delete take any HGLRC. */
+static void *create_wgl_es_context(void) {
+    void *bootstrap = g_sdl.api.GL_CreateContext(g_sdl.window);
+    if (!bootstrap) {
+        fprintf(stderr, "[egl] WGL bootstrap context failed: %s\n", sdl_error());
+        return NULL;
+    }
+    void *(GL_APIENTRY *create_attribs)(void *, void *, const int *) =
+        g_sdl.api.GL_GetProcAddress("wglCreateContextAttribsARB");
+    void *(GL_APIENTRY *current_dc)(void) = g_sdl.api.GL_GetProcAddress("wglGetCurrentDC");
+    void *dc = current_dc ? current_dc() : NULL;
+    int minor = g_sdl.context_major == 1 ? 1 : 0;
+    const int attributes[] = {WGL_CONTEXT_MAJOR_VERSION_ARB,  g_sdl.context_major,
+                              WGL_CONTEXT_MINOR_VERSION_ARB,  minor,
+                              WGL_CONTEXT_PROFILE_MASK_ARB,   WGL_CONTEXT_ES_PROFILE_BIT_EXT,
+                              0};
+    void *context = create_attribs && dc ? create_attribs(dc, NULL, attributes) : NULL;
+    g_sdl.api.GL_MakeCurrent(g_sdl.window, NULL);
+    g_sdl.api.GL_DeleteContext(bootstrap);
+    if (!context) {
+        fprintf(stderr, "[egl] WGL OpenGL ES %d.%d context failed (create=%p dc=%p)\n",
+                g_sdl.context_major, minor, (void *)create_attribs, dc);
+        return NULL;
+    }
+    if (g_sdl.api.GL_MakeCurrent(g_sdl.window, context) == 0) {
+        const char *(GL_APIENTRY *get_string)(unsigned int) =
+            g_sdl.api.GL_GetProcAddress("glGetString");
+        const char *version = get_string ? get_string(0x1F02) : NULL;
+        const char *renderer = get_string ? get_string(0x1F01) : NULL;
+        fprintf(stderr, "[egl] WGL context: %s on %s\n", version ? version : "?",
+                renderer ? renderer : "?");
+        g_sdl.api.GL_MakeCurrent(g_sdl.window, NULL);
+    }
+    return context;
+}
+#endif
 
 static int ensure_context(void) {
     if (g_sdl.context) {
@@ -365,7 +456,11 @@ static int ensure_context(void) {
         return 0;
     }
     apply_window_attributes();
+#if defined(_WIN32)
+    g_sdl.context = create_wgl_es_context();
+#else
     g_sdl.context = g_sdl.api.GL_CreateContext(g_sdl.window);
+#endif
     if (!g_sdl.context) {
         fprintf(stderr, "[egl] SDL OpenGL ES %d context creation failed: %s\n", g_sdl.context_major,
                 sdl_error());
@@ -387,18 +482,18 @@ static EGLDisplay host_eglGetDisplay(void *native_display) {
     if (sdl_owns_display()) {
         return fallback_display();
     }
-    EGLDisplay (*native)(void *) = lookup_egl("eglGetDisplay");
+    EGLDisplay (GL_APIENTRY *native)(void *) = lookup_egl("eglGetDisplay");
     EGLDisplay display = native ? native(native_display) : NULL;
     return display ? display : fallback_display();
 }
 
 static EGLBoolean host_eglInitialize(EGLDisplay display, EGLint *major, EGLint *minor) {
-    EGLBoolean (*native)(EGLDisplay, EGLint *, EGLint *) = lookup_egl("eglInitialize");
+    EGLBoolean (GL_APIENTRY *native)(EGLDisplay, EGLint *, EGLint *) = lookup_egl("eglInitialize");
     int native_display = display != fallback_display();
     if (native_display && native && native(display, major, minor)) {
         return 1;
     }
-    EGLint (*get_error)(void) = lookup_egl("eglGetError");
+    EGLint (GL_APIENTRY *get_error)(void) = lookup_egl("eglGetError");
     EGLint native_error = native_display && get_error ? get_error() : EGL_NOT_INITIALIZED;
     if (!initialize_sdl(display)) {
         if (native_display) {
@@ -427,7 +522,7 @@ static EGLBoolean host_eglInitialize(EGLDisplay display, EGLint *major, EGLint *
 static EGLBoolean host_eglGetConfigs(EGLDisplay display, EGLConfig *configs, EGLint config_size,
                                      EGLint *count) {
     if (!uses_sdl(display)) {
-        EGLBoolean (*native)(EGLDisplay, EGLConfig *, EGLint, EGLint *) =
+        EGLBoolean (GL_APIENTRY *native)(EGLDisplay, EGLConfig *, EGLint, EGLint *) =
             lookup_egl("eglGetConfigs");
         return native ? native(display, configs, config_size, count) : 0;
     }
@@ -445,7 +540,7 @@ static EGLBoolean host_eglGetConfigs(EGLDisplay display, EGLConfig *configs, EGL
 static EGLBoolean host_eglGetConfigAttrib(EGLDisplay display, EGLConfig config, EGLint attribute,
                                           EGLint *value) {
     if (!uses_sdl(display)) {
-        EGLBoolean (*native)(EGLDisplay, EGLConfig, EGLint, EGLint *) =
+        EGLBoolean (GL_APIENTRY *native)(EGLDisplay, EGLConfig, EGLint, EGLint *) =
             lookup_egl("eglGetConfigAttrib");
         return native ? native(display, config, attribute, value) : 0;
     }
@@ -495,7 +590,7 @@ static EGLSurface host_eglCreateWindowSurface(EGLDisplay display, EGLConfig conf
                                               EGLNativeWindowType native_window,
                                               const EGLint *attributes) {
     if (!uses_sdl(display)) {
-        EGLSurface (*native)(EGLDisplay, EGLConfig, EGLNativeWindowType, const EGLint *) =
+        EGLSurface (GL_APIENTRY *native)(EGLDisplay, EGLConfig, EGLNativeWindowType, const EGLint *) =
             lookup_egl("eglCreateWindowSurface");
         return native ? native(display, config, native_window, attributes) : NULL;
     }
@@ -515,7 +610,7 @@ static EGLSurface host_eglCreateWindowSurface(EGLDisplay display, EGLConfig conf
 static EGLContext host_eglCreateContext(EGLDisplay display, EGLConfig config, EGLContext share,
                                         const EGLint *attributes) {
     if (!uses_sdl(display)) {
-        EGLContext (*native)(EGLDisplay, EGLConfig, EGLContext, const EGLint *) =
+        EGLContext (GL_APIENTRY *native)(EGLDisplay, EGLConfig, EGLContext, const EGLint *) =
             lookup_egl("eglCreateContext");
         return native ? native(display, config, share, attributes) : NULL;
     }
@@ -540,7 +635,7 @@ static EGLContext host_eglCreateContext(EGLDisplay display, EGLConfig config, EG
 static EGLBoolean host_eglMakeCurrent(EGLDisplay display, EGLSurface draw, EGLSurface read,
                                       EGLContext context) {
     if (!uses_sdl(display)) {
-        EGLBoolean (*native)(EGLDisplay, EGLSurface, EGLSurface, EGLContext) =
+        EGLBoolean (GL_APIENTRY *native)(EGLDisplay, EGLSurface, EGLSurface, EGLContext) =
             lookup_egl("eglMakeCurrent");
         return native ? native(display, draw, read, context) : 0;
     }
@@ -579,7 +674,7 @@ static EGLBoolean host_eglMakeCurrent(EGLDisplay display, EGLSurface draw, EGLSu
 static EGLBoolean host_eglQuerySurface(EGLDisplay display, EGLSurface surface, EGLint attribute,
                                        EGLint *value) {
     if (!uses_sdl(display)) {
-        EGLBoolean (*native)(EGLDisplay, EGLSurface, EGLint, EGLint *) =
+        EGLBoolean (GL_APIENTRY *native)(EGLDisplay, EGLSurface, EGLint, EGLint *) =
             lookup_egl("eglQuerySurface");
         EGLBoolean result = native ? native(display, surface, attribute, value) : 0;
         if (result && value && attribute == EGL_WIDTH) {
@@ -608,7 +703,7 @@ static EGLBoolean host_eglQuerySurface(EGLDisplay display, EGLSurface surface, E
 static EGLBoolean host_eglQueryContext(EGLDisplay display, EGLContext context, EGLint attribute,
                                        EGLint *value) {
     if (!uses_sdl(display)) {
-        EGLBoolean (*native)(EGLDisplay, EGLContext, EGLint, EGLint *) =
+        EGLBoolean (GL_APIENTRY *native)(EGLDisplay, EGLContext, EGLint, EGLint *) =
             lookup_egl("eglQueryContext");
         return native ? native(display, context, attribute, value) : 0;
     }
@@ -634,7 +729,7 @@ static EGLDisplay host_eglGetCurrentDisplay(void) {
     if (g_sdl.active) {
         return g_sdl.current ? g_sdl.display : NULL;
     }
-    EGLDisplay (*native)(void) = lookup_egl("eglGetCurrentDisplay");
+    EGLDisplay (GL_APIENTRY *native)(void) = lookup_egl("eglGetCurrentDisplay");
     return native ? native() : NULL;
 }
 
@@ -642,7 +737,7 @@ static EGLContext host_eglGetCurrentContext(void) {
     if (g_sdl.active) {
         return g_sdl.current ? (EGLContext)g_sdl.context : NULL;
     }
-    EGLContext (*native)(void) = lookup_egl("eglGetCurrentContext");
+    EGLContext (GL_APIENTRY *native)(void) = lookup_egl("eglGetCurrentContext");
     return native ? native() : NULL;
 }
 
@@ -651,13 +746,13 @@ static EGLSurface host_eglGetCurrentSurface(EGLint readdraw) {
         (void)readdraw;
         return g_sdl.current ? (EGLSurface)g_sdl.window : NULL;
     }
-    EGLSurface (*native)(EGLint) = lookup_egl("eglGetCurrentSurface");
+    EGLSurface (GL_APIENTRY *native)(EGLint) = lookup_egl("eglGetCurrentSurface");
     return native ? native(readdraw) : NULL;
 }
 
 static const char *host_eglQueryString(EGLDisplay display, EGLint name) {
     if (!uses_sdl(display)) {
-        const char *(*native)(EGLDisplay, EGLint) = lookup_egl("eglQueryString");
+        const char *(GL_APIENTRY *native)(EGLDisplay, EGLint) = lookup_egl("eglQueryString");
         return native ? native(display, name) : NULL;
     }
     switch (name) {
@@ -677,7 +772,7 @@ static const char *host_eglQueryString(EGLDisplay display, EGLint name) {
 
 static EGLBoolean host_eglBindAPI(GLenum api) {
     if (!g_sdl.active) {
-        EGLBoolean (*native)(GLenum) = lookup_egl("eglBindAPI");
+        EGLBoolean (GL_APIENTRY *native)(GLenum) = lookup_egl("eglBindAPI");
         return native ? native(api) : 0;
     }
     if (api != EGL_OPENGL_ES_API) {
@@ -689,7 +784,7 @@ static EGLBoolean host_eglBindAPI(GLenum api) {
 
 static EGLBoolean host_eglDestroyContext(EGLDisplay display, EGLContext context) {
     if (!uses_sdl(display)) {
-        EGLBoolean (*native)(EGLDisplay, EGLContext) = lookup_egl("eglDestroyContext");
+        EGLBoolean (GL_APIENTRY *native)(EGLDisplay, EGLContext) = lookup_egl("eglDestroyContext");
         return native ? native(display, context) : 0;
     }
     if (context != (EGLContext)g_sdl.context || !g_sdl.context_valid) {
@@ -709,7 +804,7 @@ static EGLBoolean host_eglDestroyContext(EGLDisplay display, EGLContext context)
 
 static EGLBoolean host_eglDestroySurface(EGLDisplay display, EGLSurface surface) {
     if (!uses_sdl(display)) {
-        EGLBoolean (*native)(EGLDisplay, EGLSurface) = lookup_egl("eglDestroySurface");
+        EGLBoolean (GL_APIENTRY *native)(EGLDisplay, EGLSurface) = lookup_egl("eglDestroySurface");
         return native ? native(display, surface) : 0;
     }
     if (surface != (EGLSurface)g_sdl.window || !g_sdl.surface_valid) {
@@ -722,7 +817,7 @@ static EGLBoolean host_eglDestroySurface(EGLDisplay display, EGLSurface surface)
 
 static EGLBoolean host_eglTerminate(EGLDisplay display) {
     if (!uses_sdl(display)) {
-        EGLBoolean (*native)(EGLDisplay) = lookup_egl("eglTerminate");
+        EGLBoolean (GL_APIENTRY *native)(EGLDisplay) = lookup_egl("eglTerminate");
         return native ? native(display) : 0;
     }
     egl_backend_shutdown();
@@ -732,7 +827,7 @@ static EGLBoolean host_eglTerminate(EGLDisplay display) {
 static EGLSurface host_eglCreatePbufferSurface(EGLDisplay display, EGLConfig config,
                                                const EGLint *attributes) {
     if (!uses_sdl(display)) {
-        EGLSurface (*native)(EGLDisplay, EGLConfig, const EGLint *) =
+        EGLSurface (GL_APIENTRY *native)(EGLDisplay, EGLConfig, const EGLint *) =
             lookup_egl("eglCreatePbufferSurface");
         return native ? native(display, config, attributes) : NULL;
     }
@@ -744,7 +839,7 @@ static EGLSurface host_eglCreatePbufferSurface(EGLDisplay display, EGLConfig con
 
 static EGLBoolean host_eglBindTexImage(EGLDisplay display, EGLSurface surface, EGLint buffer) {
     if (!uses_sdl(display)) {
-        EGLBoolean (*native)(EGLDisplay, EGLSurface, EGLint) = lookup_egl("eglBindTexImage");
+        EGLBoolean (GL_APIENTRY *native)(EGLDisplay, EGLSurface, EGLint) = lookup_egl("eglBindTexImage");
         return native ? native(display, surface, buffer) : 0;
     }
     (void)surface;
@@ -755,7 +850,7 @@ static EGLBoolean host_eglBindTexImage(EGLDisplay display, EGLSurface surface, E
 
 static EGLBoolean host_eglReleaseTexImage(EGLDisplay display, EGLSurface surface, EGLint buffer) {
     if (!uses_sdl(display)) {
-        EGLBoolean (*native)(EGLDisplay, EGLSurface, EGLint) = lookup_egl("eglReleaseTexImage");
+        EGLBoolean (GL_APIENTRY *native)(EGLDisplay, EGLSurface, EGLint) = lookup_egl("eglReleaseTexImage");
         return native ? native(display, surface, buffer) : 0;
     }
     (void)surface;
@@ -766,7 +861,7 @@ static EGLBoolean host_eglReleaseTexImage(EGLDisplay display, EGLSurface surface
 
 static EGLint host_eglGetError(void) {
     if (!g_sdl.active) {
-        EGLint (*native)(void) = lookup_egl("eglGetError");
+        EGLint (GL_APIENTRY *native)(void) = lookup_egl("eglGetError");
         return native ? native() : EGL_SUCCESS;
     }
     EGLint error = g_sdl.error;
@@ -776,7 +871,7 @@ static EGLint host_eglGetError(void) {
 
 EGLBoolean egl_backend_swap_buffers(EGLDisplay display, EGLSurface surface) {
     if (!uses_sdl(display)) {
-        EGLBoolean (*native)(EGLDisplay, EGLSurface) = lookup_egl("eglSwapBuffers");
+        EGLBoolean (GL_APIENTRY *native)(EGLDisplay, EGLSurface) = lookup_egl("eglSwapBuffers");
         return native ? native(display, surface) : 0;
     }
     if (surface != (EGLSurface)g_sdl.window || !g_sdl.surface_valid) {
@@ -799,7 +894,7 @@ void *egl_backend_get_proc_address(const char *name) {
     if (g_sdl.active && g_sdl.api.GL_GetProcAddress) {
         return g_sdl.api.GL_GetProcAddress(name);
     }
-    void *(*native)(const char *) = lookup_egl("eglGetProcAddress");
+    void *(GL_APIENTRY *native)(const char *) = lookup_egl("eglGetProcAddress");
     return native ? native(name) : NULL;
 }
 
@@ -860,7 +955,7 @@ void egl_backend_shutdown(void) {
         g_sdl.api.QuitSubSystem(SDL_INIT_VIDEO);
     }
     if (g_sdl.library) {
-        dlclose(g_sdl.library);
+        plat_lib_close(g_sdl.library);
     }
     memset(&g_sdl, 0, sizeof(g_sdl));
     g_sdl.error = EGL_SUCCESS;

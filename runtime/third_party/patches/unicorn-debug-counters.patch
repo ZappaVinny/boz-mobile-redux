@@ -1,0 +1,47 @@
+diff --git i/qemu/accel/tcg/cputlb.c w/qemu/accel/tcg/cputlb.c
+index 3d0bebd3..178b0239 100644
+--- i/qemu/accel/tcg/cputlb.c
++++ w/qemu/accel/tcg/cputlb.c
+@@ -18,6 +18,10 @@
+  */
+ 
+ #include "qemu/osdep.h"
++
++extern size_t uc_debug_full_flushes;
++extern size_t uc_debug_notdirty_writes;
++extern size_t uc_debug_tlb_fills;
+ #include "cpu.h"
+ #include "exec/exec-all.h"
+ #include "exec/memory.h"
+@@ -303,6 +307,7 @@ static void tlb_flush_by_mmuidx_async_work(CPUState *cpu, run_on_cpu_data data)
+     cpu_tb_jmp_cache_clear(cpu);
+ 
+     if (to_clean == ALL_MMUIDX_BITS) {
++        uc_debug_full_flushes++;
+         env_tlb(env)->c.full_flush_count = env_tlb(env)->c.full_flush_count + 1;
+     } else {
+         env_tlb(env)->c.part_flush_count = env_tlb(env)->c.part_flush_count + ctpop16(to_clean);
+@@ -811,6 +816,7 @@ void tlb_set_page_with_attrs(CPUState *cpu, target_ulong vaddr,
+                              hwaddr paddr, MemTxAttrs attrs, int prot,
+                              int mmu_idx, target_ulong size)
+ {
++    uc_debug_tlb_fills++;
+ #ifdef TARGET_ARM
+     struct uc_struct *uc = cpu->uc;
+ #endif
+@@ -1186,10 +1192,15 @@ tb_page_addr_t get_page_addr_code(CPUArchState *env, target_ulong addr)
+     return get_page_addr_code_hostp(env, addr, NULL);
+ }
+ 
++size_t uc_debug_full_flushes;
++size_t uc_debug_notdirty_writes;
++size_t uc_debug_tlb_fills;
++
+ static void notdirty_write(CPUState *cpu, vaddr mem_vaddr, unsigned size,
+                            CPUIOTLBEntry *iotlbentry, uintptr_t retaddr,
+                            CPUTLBEntry *tlbe)
+ {
++    uc_debug_notdirty_writes++;
+ #ifdef TARGET_ARM
+     struct uc_struct *uc = cpu->uc;
+ #endif

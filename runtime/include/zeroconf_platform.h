@@ -1,7 +1,7 @@
 #ifndef CODBOZ_ZEROCONF_PLATFORM_H
 #define CODBOZ_ZEROCONF_PLATFORM_H
 
-#include <netinet/in.h>
+#include "socket_compat.h"
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/types.h>

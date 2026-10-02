@@ -43,7 +43,7 @@ static bool write_all(int fd, const uint8_t *buffer, size_t length) {
 }
 
 static bool load_bytes(const char *path, uint8_t bytes[DEVICE_ID_BYTE_COUNT]) {
-    int flags = O_RDONLY | O_CLOEXEC;
+    int flags = O_RDONLY | O_CLOEXEC | O_BINARY;
 #ifdef O_NOFOLLOW
     flags |= O_NOFOLLOW;
 #endif
@@ -60,13 +60,7 @@ static bool load_bytes(const char *path, uint8_t bytes[DEVICE_ID_BYTE_COUNT]) {
 }
 
 static bool random_bytes(uint8_t bytes[DEVICE_ID_BYTE_COUNT]) {
-    int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
-    if (fd < 0) {
-        return false;
-    }
-    bool valid = read_all(fd, bytes, DEVICE_ID_BYTE_COUNT);
-    close(fd);
-    return valid;
+    return plat_random_bytes(bytes, DEVICE_ID_BYTE_COUNT);
 }
 
 static bool store_bytes(const char *path, const char *root,
@@ -80,12 +74,13 @@ static bool store_bytes(const char *path, const char *root,
     if (fd < 0) {
         return false;
     }
+    set_binary_mode(fd);
     bool stored =
         fchmod(fd, 0600) == 0 && write_all(fd, bytes, DEVICE_ID_BYTE_COUNT) && fsync(fd) == 0;
     int close_result = close(fd);
     stored = stored && close_result == 0;
     if (stored) {
-        stored = rename(temporary, path) == 0;
+        stored = plat_rename_replace(temporary, path) == 0;
     }
     if (!stored) {
         unlink(temporary);

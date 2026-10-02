@@ -1,0 +1,56 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "linux-x86",
+      "displayName": "Linux 32-bit (x86)",
+      "binaryDir": "${sourceDir}/build/linux-x86",
+      "toolchainFile": "${sourceDir}/cmake/i686-linux.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "name": "windows-x86",
+      "displayName": "Windows 32-bit (x86, MinGW cross)",
+      "binaryDir": "${sourceDir}/build/windows-x86",
+      "toolchainFile": "${sourceDir}/cmake/i686-w64-mingw32.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "linux-x86",
+      "configurePreset": "linux-x86",
+      "targets": [
+        "codboz_s3e_loader",
+        "codboz_apk_extract",
+        "SDL2"
+      ]
+    },
+    {
+      "name": "linux-x86-tests",
+      "configurePreset": "linux-x86"
+    },
+    {
+      "name": "windows-x86",
+      "configurePreset": "windows-x86",
+      "targets": [
+        "codboz_s3e_loader",
+        "codboz_apk_extract",
+        "SDL2"
+      ]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "linux-x86",
+      "configurePreset": "linux-x86",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

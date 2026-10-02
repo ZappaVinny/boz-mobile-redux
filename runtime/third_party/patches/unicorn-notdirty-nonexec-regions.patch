@@ -1,0 +1,16 @@
+diff --git i/qemu/accel/tcg/cputlb.c w/qemu/accel/tcg/cputlb.c
+index 3d0bebd3..2465428f 100644
+--- i/qemu/accel/tcg/cputlb.c
++++ w/qemu/accel/tcg/cputlb.c
+@@ -1208,8 +1208,10 @@ static void notdirty_write(CPUState *cpu, vaddr mem_vaddr, unsigned size,
+     // - have memory hooks installed
+     // - or doing snapshot
+     // , then never clean the tlb
++    /* The ARM MMU-off path grants PAGE_EXEC everywhere, so addr_code is always set; use the
++       region's Unicorn permissions to decide whether this page can hold translated code. */
+     if (!(!mr || (tlbe->addr_write != -1 && mr->priority < cpu->uc->snapshot_level)) &&
+-            !(tlbe->addr_code != -1) &&
++            !(mr->perms & UC_PROT_EXEC) &&
+             !uc_mem_hook_installed(cpu->uc, tlbe->paddr | (mem_vaddr & ~TARGET_PAGE_MASK))) {
+         tlb_set_dirty(cpu, mem_vaddr);
+     }

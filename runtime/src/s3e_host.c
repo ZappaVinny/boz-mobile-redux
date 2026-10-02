@@ -58,17 +58,12 @@ uint64_t monotonic_ms(void) {
 }
 
 void sleep_ms(uint32_t ms) {
-    struct timespec req = {
-        .tv_sec = ms / 1000u,
-        .tv_nsec = (long)(ms % 1000u) * 1000000L,
-    };
-    while (nanosleep(&req, &req) != 0 && errno == EINTR) {
-    }
+    plat_sleep_us((uint64_t)ms * 1000u);
 }
 
 void *open_first(const char *const *names) {
     for (size_t i = 0; names[i]; ++i) {
-        void *handle = dlopen(names[i], RTLD_NOW | RTLD_LOCAL);
+        void *handle = plat_lib_open(names[i]);
         if (handle) {
             return handle;
         }
@@ -79,13 +74,13 @@ void *open_first(const char *const *names) {
 void *lookup_gl(const char *symbol) {
     void *addr = egl_backend_get_gl_proc(symbol);
     if (g_gles2) {
-        addr = addr ? addr : dlsym(g_gles2, symbol);
+        addr = addr ? addr : plat_lib_symbol(g_gles2, symbol);
     }
     if (!addr && g_gles1) {
-        addr = dlsym(g_gles1, symbol);
+        addr = plat_lib_symbol(g_gles1, symbol);
     }
     if (!addr && g_egl) {
-        void *(*egl_get_proc_address)(const char *) = dlsym(g_egl, "eglGetProcAddress");
+        void *(*egl_get_proc_address)(const char *) = plat_lib_symbol(g_egl, "eglGetProcAddress");
         if (egl_get_proc_address) {
             addr = egl_get_proc_address(symbol);
         }
@@ -94,7 +89,7 @@ void *lookup_gl(const char *symbol) {
 }
 
 void *lookup_egl(const char *symbol) {
-    return g_egl ? dlsym(g_egl, symbol) : NULL;
+    return g_egl ? plat_lib_symbol(g_egl, symbol) : NULL;
 }
 
 bool s3e_host_set_display_size(uint32_t width, uint32_t height) {
@@ -193,20 +188,20 @@ void s3e_host_shutdown(void) {
     }
     g_stub_count = 0;
     if (g_stub_code) {
-        munmap(g_stub_code, g_stub_code_size);
+        plat_free(g_stub_code, g_stub_code_size);
         g_stub_code = NULL;
         g_stub_code_size = 0;
     }
     if (g_egl) {
-        dlclose(g_egl);
+        plat_lib_close(g_egl);
         g_egl = NULL;
     }
     if (g_gles1) {
-        dlclose(g_gles1);
+        plat_lib_close(g_gles1);
         g_gles1 = NULL;
     }
     if (g_gles2) {
-        dlclose(g_gles2);
+        plat_lib_close(g_gles2);
         g_gles2 = NULL;
     }
 }

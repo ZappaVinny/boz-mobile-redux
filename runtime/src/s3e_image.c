@@ -1,17 +1,14 @@
 #include "s3e_image.h"
+#include "platform/platform.h"
+#include "posix_compat.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
-
-#ifndef MAP_FIXED_NOREPLACE
-#define MAP_FIXED_NOREPLACE MAP_FIXED
-#endif
 
 #define S3E_MAGIC 0x55334558u
 
@@ -28,15 +25,14 @@ static bool range_ok(size_t size, uint32_t offset, uint32_t length) {
 }
 
 static size_t page_round(size_t size) {
-    long page = sysconf(_SC_PAGESIZE);
-    size_t mask = (size_t)page - 1;
+    size_t mask = plat_page_size() - 1;
     return (size + mask) & ~mask;
 }
 
 bool s3e_image_load(const char *path, struct s3e_image *image) {
     memset(image, 0, sizeof(*image));
 
-    int fd = open(path, O_RDONLY);
+    int fd = open(path, O_RDONLY | O_BINARY);
     if (fd < 0) {
         fprintf(stderr, "open %s: %s\n", path, strerror(errno));
         return false;
@@ -270,10 +266,9 @@ bool s3e_image_map_and_relocate(const struct s3e_image *image, void *(*resolve)(
     const struct s3e_header *h = &image->header;
     size_t map_size = page_round(h->code_mem_size);
     void *want = (void *)(uintptr_t)h->base_addr_orig;
-    uint8_t *base = mmap(want, map_size, PROT_READ | PROT_WRITE | PROT_EXEC,
-                         MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
-    if (base == MAP_FAILED) {
-        fprintf(stderr, "mmap 0x%08x: %s\n", h->base_addr_orig, strerror(errno));
+    uint8_t *base = plat_alloc(want, map_size, true);
+    if (!base) {
+        fprintf(stderr, "unable to allocate %zu bytes for the S3E image\n", map_size);
         return false;
     }
 
@@ -287,7 +282,7 @@ bool s3e_image_map_and_relocate(const struct s3e_image *image, void *(*resolve)(
         uint32_t type = rd32(image->file_data + pos);
         uint32_t size = rd32(image->file_data + pos + 4);
         if (size < 8 || size > end - pos) {
-            munmap(base, map_size);
+            plat_free(base, map_size);
             return false;
         }
 
@@ -299,7 +294,7 @@ bool s3e_image_map_and_relocate(const struct s3e_image *image, void *(*resolve)(
         }
 
         if (!ok) {
-            munmap(base, map_size);
+            plat_free(base, map_size);
             return false;
         }
 
@@ -314,7 +309,7 @@ bool s3e_image_map_and_relocate(const struct s3e_image *image, void *(*resolve)(
 
 void s3e_loaded_image_unmap(struct s3e_loaded_image *loaded) {
     if (loaded && loaded->base) {
-        munmap(loaded->base, loaded->map_size);
+        plat_free(loaded->base, loaded->map_size);
         memset(loaded, 0, sizeof(*loaded));
     }
 }

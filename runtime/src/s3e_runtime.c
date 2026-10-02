@@ -1,5 +1,9 @@
 #include "s3e_host_internal.h"
 
+#if !defined(__arm__)
+#include "arm_emu.h"
+#endif
+
 static int g_device_quit_requested;
 
 static void wait_with_timers(uint32_t ms) {
@@ -418,10 +422,13 @@ void *make_stub(const char *symbol) {
     enum { STUB_SIZE = 20 };
     if (!g_stub_code) {
         g_stub_code_size = 16384;
-        g_stub_code = mmap(NULL, g_stub_code_size, PROT_READ | PROT_WRITE | PROT_EXEC,
-                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        if (g_stub_code == MAP_FAILED) {
-            g_stub_code = NULL;
+        g_stub_code = plat_alloc(NULL, g_stub_code_size, true);
+#if !defined(__arm__)
+        if (g_stub_code) {
+            arm_emu_register_code((uint32_t)(uintptr_t)g_stub_code, (uint32_t)g_stub_code_size);
+        }
+#endif
+        if (!g_stub_code) {
             return (void *)(uintptr_t)&s3eStub;
         }
     }
@@ -440,6 +447,67 @@ void *make_stub(const char *symbol) {
     __builtin___clear_cache((char *)code, (char *)(code + 5));
     return code;
 }
+
+#if !defined(__arm__)
+
+enum { LAZY_GL_STUB_WORDS = 5, LAZY_GL_MAX = 512 };
+
+struct lazy_gl_import {
+    const char *name;
+    uint32_t *stub;
+    int reported;
+};
+
+static struct lazy_gl_import g_lazy_gl[LAZY_GL_MAX];
+static size_t g_lazy_gl_count;
+static uint32_t *g_lazy_gl_code;
+
+static uint64_t lazy_gl_resolve(uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4,
+                                uint32_t a5, uint32_t a6, uint32_t a7, uint32_t a8, uint32_t a9,
+                                uint32_t a10, uint32_t a11, uint32_t a12, uint32_t a13,
+                                uint32_t a14, uint32_t a15) {
+    uint32_t index = arm_emu_call_scratch();
+    if (index >= g_lazy_gl_count) {
+        return 0;
+    }
+    struct lazy_gl_import *import = &g_lazy_gl[index];
+    void *fn = lookup_gl(import->name);
+    if (!fn) {
+        if (!import->reported) {
+            import->reported = 1;
+            fprintf(stderr, "[gl] %s is unavailable\n", import->name);
+        }
+        return 0;
+    }
+    import->stub[4] = (uint32_t)(uintptr_t)fn;
+    uint32_t args[16] = {a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15};
+    return arm_emu_call_host((uint32_t)(uintptr_t)fn, args);
+}
+
+void *make_lazy_gl_stub(const char *symbol) {
+    if (!g_lazy_gl_code) {
+        g_lazy_gl_code = plat_alloc(NULL, LAZY_GL_MAX * LAZY_GL_STUB_WORDS * sizeof(uint32_t), true);
+        if (!g_lazy_gl_code) {
+            return make_stub(symbol);
+        }
+        arm_emu_register_code((uint32_t)(uintptr_t)g_lazy_gl_code,
+                              LAZY_GL_MAX * LAZY_GL_STUB_WORDS * sizeof(uint32_t));
+    }
+    if (g_lazy_gl_count >= LAZY_GL_MAX) {
+        return make_stub(symbol);
+    }
+    size_t index = g_lazy_gl_count++;
+    uint32_t *code = g_lazy_gl_code + index * LAZY_GL_STUB_WORDS;
+    code[0] = 0xe59fc004u;
+    code[1] = 0xe59ff004u;
+    code[2] = 0xe1a00000u;
+    code[3] = (uint32_t)index;
+    code[4] = (uint32_t)(uintptr_t)&lazy_gl_resolve;
+    g_lazy_gl[index].name = strdup(symbol);
+    g_lazy_gl[index].stub = code;
+    return code;
+}
+#endif
 
 int32_t s3eRegisterNoop(uint32_t id, void *callback, void *user_data) {
     (void)id;

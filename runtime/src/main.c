@@ -1,6 +1,11 @@
 #include "codboz_frame_interpolation.h"
 #include "s3e_host.h"
+#include "s3e_host_internal.h"
 #include "s3e_image.h"
+#include "platform/platform.h"
+#if defined(_WIN32)
+#include "platform/gl_probe.h"
+#endif
 
 #include <signal.h>
 #include <stdbool.h>
@@ -8,7 +13,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(__arm__)
 #include <ucontext.h>
+#endif
 
 #if !defined(__arm__)
 #include "arm_emu.h"
@@ -207,6 +214,10 @@ static void terminate_handler(int sig) {
 }
 
 static void install_terminate_handlers(void) {
+#if defined(_WIN32)
+    signal(SIGINT, terminate_handler);
+    signal(SIGTERM, terminate_handler);
+#else
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = terminate_handler;
@@ -214,9 +225,15 @@ static void install_terminate_handlers(void) {
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
     sigaction(SIGHUP, &sa, NULL);
+#endif
 }
 
 int main(int argc, char **argv) {
+#if defined(_WIN32)
+    if (argc >= 2 && strcmp(argv[1], "--gl-probe") == 0) {
+        return gl_probe_run(argc >= 3 ? argv[2] : NULL);
+    }
+#endif
     bool run = false;
     const char *root = NULL;
     const char *image_path = NULL;
@@ -263,8 +280,15 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    if (!plat_init()) {
+        fprintf(stderr, "platform initialisation failed\n");
+        return 1;
+    }
     install_crash_handlers();
     install_terminate_handlers();
+#if defined(_WIN32)
+    gl_probe_select_driver();
+#endif
 
     struct s3e_image image;
     if (!s3e_image_load(image_path, &image)) {
@@ -316,6 +340,11 @@ int main(int argc, char **argv) {
         if (!arm_emu_init()) {
             return 1;
         }
+        arm_emu_set_image((uint32_t)(uintptr_t)loaded.base,
+                          (uint32_t)((uintptr_t)loaded.base + loaded.map_size));
+        arm_emu_trace_ignore((uint32_t)(uintptr_t)&s3eMallocBase);
+        arm_emu_trace_ignore((uint32_t)(uintptr_t)&s3eFreeBase);
+        arm_emu_trace_ignore((uint32_t)(uintptr_t)&s3eReallocBase);
         int rc = (int)arm_emu_call((uint32_t)(uintptr_t)(loaded.base + loaded.entry_offset), 0, NULL);
 #endif
         fprintf(stderr, "S3E entry returned %d\n", rc);

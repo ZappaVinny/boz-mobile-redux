@@ -5,12 +5,13 @@ Runs the Android Marmalade build of *Call of Duty: Black Ops Zombies* (1.0.11) o
 ## Build
 
 ```bash
-make          # Unicorn + SDL2 (32-bit, from third_party/), the loader, the APK extractor
-make test     # host unit tests (32-bit) and the ARM bridge test
-make clean
+cmake --preset linux-x86                 # configure; Unicorn and SDL2 build as subprojects
+cmake --build --preset linux-x86         # loader, APK extractor, SDL2
+cmake --build --preset linux-x86-tests   # everything, including tests
+ctest --preset linux-x86                 # unit tests and the ARM bridge test
 ```
 
-Outputs: `build/x86/codboz_s3e_loader`, `build/host/codboz_apk_extract`, `build/x86/sdl2-install/lib/`.
+Outputs land in `build/linux-x86/bin/`: `codboz_s3e_loader`, `codboz_apk_extract` and `libSDL2-2.0.so.0`. The loader finds SDL2 next to itself. Tests build into `build/linux-x86/tests/`.
 
 ## Run
 
