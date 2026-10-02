@@ -11,89 +11,50 @@ permissions:
   contents: write
 
 jobs:
-  linux:
-    name: Linux x86
+  build:
+    name: ${{ matrix.name }}
     runs-on: ubuntu-24.04
+    # Arch matches the development toolchain: 32-bit multilib for Linux, MinGW-w64 for Windows.
+    container: archlinux:base-devel
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86
+            target: linux
+            artifact: BOZ-Redux-linux-x86
+            path: runtime/build/linux-x86/package/BOZ-Redux-linux-x86.tar.gz
+          - name: Windows x86
+            target: windows
+            artifact: BOZ-Redux-windows-x86
+            path: runtime/build/windows-x86/package/BOZ-Redux-windows-x86.zip
     steps:
+      - name: Install git
+        run: pacman -Sy --noconfirm --needed git
+
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-
-      - name: Install 32-bit toolchain and SDL build dependencies
-        run: |
-          sudo dpkg --add-architecture i386
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            cmake gcc-multilib g++-multilib pkg-config wayland-protocols libwayland-bin \
-            libx11-dev:i386 libxext-dev:i386 libxcursor-dev:i386 libxi-dev:i386 \
-            libxrandr-dev:i386 libxss-dev:i386 libxkbcommon-dev:i386 libwayland-dev:i386 \
-            libdecor-0-dev:i386 libegl-dev:i386 libgles-dev:i386 libasound2-dev:i386 \
-            libpulse-dev:i386
-
-      - name: Configure
-        working-directory: runtime
-        run: cmake --preset linux-x86
-
-      - name: Build with tests
-        working-directory: runtime
-        run: cmake --build --preset linux-x86-tests
-
-      - name: Test
-        working-directory: runtime
-        run: ctest --preset linux-x86 --output-on-failure
-
-      - name: Package
-        working-directory: runtime
-        run: scripts/package-linux.sh
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: BOZ-Redux-linux-x86
-          path: runtime/build/linux-x86/package/BOZ-Redux-linux-x86.tar.gz
-
-  windows:
-    name: Windows x86
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Install MinGW-w64 and packaging tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            cmake mingw-w64 libarchive-tools zip
-          # Unicorn and the platform layer need the POSIX threading model of MinGW-w64.
-          sudo update-alternatives --set i686-w64-mingw32-gcc /usr/bin/i686-w64-mingw32-gcc-posix
-          sudo update-alternatives --set i686-w64-mingw32-g++ /usr/bin/i686-w64-mingw32-g++-posix
 
       - uses: actions/cache@v4
+        if: matrix.target == 'windows'
         with:
           path: runtime/build/downloads
           key: mesa-${{ hashFiles('runtime/scripts/fetch-mesa-windows.sh') }}
 
-      - name: Configure
+      - name: Build, test and package
         working-directory: runtime
-        run: cmake --preset windows-x86
-
-      - name: Build
-        working-directory: runtime
-        run: cmake --build --preset windows-x86
-
-      - name: Package
-        working-directory: runtime
-        run: scripts/package-windows.sh
+        run: scripts/ci.sh ${{ matrix.target }}
 
       - uses: actions/upload-artifact@v4
         with:
-          name: BOZ-Redux-windows-x86
-          path: runtime/build/windows-x86/package/BOZ-Redux-windows-x86.zip
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.path }}
 
   release:
     name: Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [linux, windows]
+    needs: build
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4
