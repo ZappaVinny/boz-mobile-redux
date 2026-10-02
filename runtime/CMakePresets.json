@@ -27,7 +27,9 @@
       "targets": [
         "codboz_s3e_loader",
         "codboz_apk_extract",
-        "SDL2"
+        "boz-redux",
+        "SDL2",
+        "SDL2_mixer"
       ]
     },
     {
@@ -40,7 +42,9 @@
       "targets": [
         "codboz_s3e_loader",
         "codboz_apk_extract",
-        "SDL2"
+        "boz-redux",
+        "SDL2",
+        "SDL2_mixer"
       ]
     }
   ],

@@ -3,6 +3,8 @@ original/
 assets/
 saves/
 client.ini
+boz-log.txt
+setup-log.txt
 *.apk
 *.dz
 *.s3e
