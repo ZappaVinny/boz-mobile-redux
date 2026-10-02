@@ -31,6 +31,19 @@ static uint64_t host_wide(void) {
     return 0x1122334455667788ull;
 }
 
+static uint32_t g_recovered_value = 0x5eed;
+static int g_recoveries;
+
+/* Repairs "ldr r0, [r0]" with r0 = 0 by pointing r0 at a valid word and retrying. */
+static bool recover_null_load(struct arm_emu_fault *fault) {
+    if (fault->write || fault->address != 0 || fault->r[0] != 0) {
+        return false;
+    }
+    fault->r[0] = (uint32_t)(uintptr_t)&g_recovered_value;
+    g_recoveries++;
+    return true;
+}
+
 static uint32_t host_reenter(uint32_t x) {
     uint32_t arg = x * 2;
     return (uint32_t)arm_emu_call((uint32_t)(uintptr_t)&g_code[0], 1, &arg);
@@ -85,6 +98,16 @@ int main(void) {
     memcpy(&g_code[20], tail, sizeof(tail));
     expect("guest passes host pointer to libc",
            (uint32_t)arm_emu_call((uint32_t)(uintptr_t)&g_code[20], 2, args), strlen(text));
+
+    /* 24: ldr r0, [r0]; bx lr */
+    uint32_t load[] = {0xe5900000u, 0xe12fff1eu};
+    memcpy(&g_code[24], load, sizeof(load));
+    arm_emu_set_fault_handler(recover_null_load);
+    args[0] = 0;
+    expect("fault handler repairs a null load",
+           (uint32_t)arm_emu_call((uint32_t)(uintptr_t)&g_code[24], 1, args), 0x5eed);
+    expect("fault handler ran once", (uint64_t)g_recoveries, 1);
+    arm_emu_set_fault_handler(NULL);
 
     return g_failures ? 1 : 0;
 }

@@ -11,9 +11,8 @@ if [ -z "${SDL_VIDEODRIVER:-}" ]; then
     export SDL_VIDEODRIVER=x11
   fi
 fi
-export BOZ_WINDOWED="${BOZ_WINDOWED-1}"
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
 export HOME="${BOZ_SAVES:-$game/saves}"
 mkdir -p "$HOME"
 cd "$game"
-exec "$bin/codboz_s3e_loader" --root "$game" --display-size "${BOZ_DISPLAY:-1280x720}" "$@" --run "$game/assets/boz.s3e.unpacked"
+exec "$bin/codboz_s3e_loader" --root "$game" "$@" --run "$game/assets/boz.s3e.unpacked"

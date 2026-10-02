@@ -1,3 +1,4 @@
+#include "client_config.h"
 #include "codboz_frame_interpolation.h"
 #include "s3e_host.h"
 #include "s3e_host_internal.h"
@@ -19,6 +20,7 @@
 
 #if !defined(__arm__)
 #include "arm_emu.h"
+#include "codboz_crash_recovery.h"
 #endif
 
 static uintptr_t g_loaded_base;
@@ -237,8 +239,9 @@ int main(int argc, char **argv) {
     bool run = false;
     const char *root = NULL;
     const char *image_path = NULL;
-    uint32_t display_width = 640;
-    uint32_t display_height = 480;
+    uint32_t display_width = 1280;
+    uint32_t display_height = 720;
+    bool display_size_given = false;
 
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--run") == 0) {
@@ -254,6 +257,7 @@ int main(int argc, char **argv) {
                 usage(argv[0]);
                 return 2;
             }
+            display_size_given = true;
             if (!parse_display_size(argv[++i], &display_width, &display_height)) {
                 fprintf(stderr, "invalid display size: %s\n", argv[i]);
                 return 2;
@@ -271,6 +275,15 @@ int main(int argc, char **argv) {
 
     if (!image_path) {
         usage(argv[0]);
+        return 2;
+    }
+
+    client_config_load(root);
+    /* Render resolution: --display-size, else BOZ_DISPLAY / client.ini, else 1280x720. */
+    const char *display_setting = getenv("BOZ_DISPLAY");
+    if (!display_size_given && display_setting &&
+        !parse_display_size(display_setting, &display_width, &display_height)) {
+        fprintf(stderr, "invalid render resolution: %s (expected WIDTHxHEIGHT)\n", display_setting);
         return 2;
     }
 
@@ -345,6 +358,7 @@ int main(int argc, char **argv) {
         arm_emu_trace_ignore((uint32_t)(uintptr_t)&s3eMallocBase);
         arm_emu_trace_ignore((uint32_t)(uintptr_t)&s3eFreeBase);
         arm_emu_trace_ignore((uint32_t)(uintptr_t)&s3eReallocBase);
+        codboz_install_crash_recovery((uint32_t)(uintptr_t)loaded.base);
         int rc = (int)arm_emu_call((uint32_t)(uintptr_t)(loaded.base + loaded.entry_offset), 0, NULL);
 #endif
         fprintf(stderr, "S3E entry returned %d\n", rc);

@@ -66,7 +66,7 @@ The Windows client renders through a bundled Mesa (`opengl32.dll`). At startup i
 | Tab | Switch to game mode | Switch to menus |
 | F11 or Alt+Enter | Toggle fullscreen | Toggle fullscreen |
 
-Mouse speed: `BOZ_MOUSE_SENS` (default 12000).
+Settings live in `client.ini` next to the game data (the repo root when running from source), written with comments on first run: fullscreen, vsync, frame rate limit, scaling, mouse sensitivity and look mode. A matching `BOZ_*` environment variable overrides a setting for one run. Keyboard and mouse controls can be rebound in the `[keys]` section; controllers are mapped automatically.
 
 ## Credits
 

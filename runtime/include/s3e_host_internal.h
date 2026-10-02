@@ -361,6 +361,9 @@ void *egl_backend_get_proc_address(const char *symbol);
 void *egl_backend_get_gl_proc(const char *symbol);
 EGLBoolean egl_backend_swap_buffers(EGLDisplay display, EGLSurface surface);
 int egl_backend_drawable_size(int *width, int *height);
+/* Refresh interval of the window's display in microseconds (0 if unknown); *vsync is set when
+ * buffer swaps wait for vertical blank. */
+uint64_t egl_backend_frame_interval_us(int *vsync);
 void present_rect(int32_t width, int32_t height, int32_t *rect);
 void egl_backend_shutdown(void);
 void input_pump(void);

@@ -8,3 +8,4 @@ lib32-libxkbcommon lib32-libdecor; on Debian/Ubuntu: libegl1:i386 libgles2:i386 
 
 Controls: Tab switches between menu (mouse pointer) and game mode (mouse look, WASD).
 F11 or Alt+Enter toggles fullscreen.
+Settings (fullscreen, vsync, frame limit, mouse sensitivity) are in client.ini, created on first run.

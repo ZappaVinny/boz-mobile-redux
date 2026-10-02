@@ -40,6 +40,26 @@ set(SDL_STATIC OFF CACHE BOOL "" FORCE)
 set(SDL_TEST OFF CACHE BOOL "" FORCE)
 add_subdirectory(third_party/SDL2 EXCLUDE_FROM_ALL)
 
+# SDL2_mixer for music and sound effects: built-in decoders only (minimp3 for the game's MP3
+# music, WAVE), so the library has no external dependencies such as FluidSynth.
+set(BUILD_SHARED_LIBS ON)
+set(SDL2MIXER_VENDORED OFF CACHE BOOL "" FORCE)
+set(SDL2MIXER_SAMPLES OFF CACHE BOOL "" FORCE)
+set(SDL2MIXER_INSTALL OFF CACHE BOOL "" FORCE)
+set(SDL2MIXER_MP3 ON CACHE BOOL "" FORCE)
+set(SDL2MIXER_MP3_MINIMP3 ON CACHE BOOL "" FORCE)
+set(SDL2MIXER_MP3_MPG123 OFF CACHE BOOL "" FORCE)
+set(SDL2MIXER_WAVE ON CACHE BOOL "" FORCE)
+foreach(format CMD FLAC GME MOD MIDI OPUS WAVPACK)
+  set(SDL2MIXER_${format} OFF CACHE BOOL "" FORCE)
+endforeach()
+set(SDL2MIXER_VORBIS "" CACHE STRING "" FORCE)
+add_subdirectory(third_party/SDL2_mixer EXCLUDE_FROM_ALL)
+unset(BUILD_SHARED_LIBS)
+if(NOT WIN32)
+  set_target_properties(SDL2_mixer PROPERTIES BUILD_RPATH "$ORIGIN")
+endif()
+
 set(BOZ_WARNINGS -Wall -Wextra -Werror -Wno-format-truncation)
 
 add_library(boz_project INTERFACE)
@@ -58,6 +78,8 @@ endif()
 add_executable(codboz_s3e_loader
   ${BOZ_PLATFORM_SOURCES}
   src/arm_emu.c
+  src/codboz_crash_recovery.c
+  src/client_config.c
   src/codboz_assets.c
   src/codboz_frame_interpolation.c
   src/main.c
@@ -89,7 +111,7 @@ target_link_libraries(codboz_s3e_loader PRIVATE boz_project unicorn ${BOZ_SYSTEM
 target_link_options(codboz_s3e_loader PRIVATE ${BOZ_SYSTEM_LINK_OPTIONS})
 target_compile_options(codboz_s3e_loader PRIVATE -falign-functions=16)
 set_target_properties(codboz_s3e_loader PROPERTIES ENABLE_EXPORTS ON BUILD_RPATH "$ORIGIN")
-add_dependencies(codboz_s3e_loader SDL2)
+add_dependencies(codboz_s3e_loader SDL2 SDL2_mixer)
 
 add_executable(codboz_apk_extract tools/apk_extract/codboz_apk_extract.c third_party/lzma/LzmaDec.c)
 target_link_libraries(codboz_apk_extract PRIVATE boz_project)
@@ -113,13 +135,14 @@ boz_test(mdns_wire_test SOURCES src/mdns_wire.c)
 boz_test(s3e_zeroconf_test SOURCES tests/zeroconf_platform_fake.c src/s3e_zeroconf.c src/mdns_wire.c
          INCLUDES tests)
 boz_test(s3e_timer_test SOURCES src/s3e_timer.c)
+boz_test(client_config_test SOURCES src/client_config.c)
 boz_test(s3e_memory_test SOURCES src/s3e_memory.c)
 boz_test(device_id_test SOURCES src/device_id.c ${BOZ_PLATFORM_SOURCES})
 boz_test(s3e_audio_test SOURCES src/s3e_audio.c
          DEFINES dlsym=s3e_audio_test_dlsym dlclose=s3e_audio_test_dlclose
                  plat_lib_symbol=s3e_audio_test_dlsym plat_lib_close=s3e_audio_test_dlclose)
 boz_test(s3e_audio_unit_test SOURCES src/s3e_audio_unit.c)
-boz_test(s3e_input_test SOURCES src/s3e_input.c
+boz_test(s3e_input_test SOURCES src/s3e_input.c src/client_config.c
          DEFINES dlsym=s3e_input_test_dlsym dlclose=s3e_input_test_dlclose
                  plat_lib_symbol=s3e_input_test_dlsym plat_lib_close=s3e_input_test_dlclose)
 

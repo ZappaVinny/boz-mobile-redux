@@ -63,7 +63,6 @@
 
 enum {
     FRAME_INTERVAL_US = 16667,
-    FRAME_RESET_US = FRAME_INTERVAL_US * 4,
     REFERENCE_SURFACE_WIDTH = 640,
     REFERENCE_SURFACE_HEIGHT = 480,
     GL_VIEWPORT_VALUE = 0x0ba2,
@@ -231,16 +230,68 @@ static void sleep_until_us(uint64_t target_us) {
     }
 }
 
+/* BOZ_TRACE_STATUS: frame rate and worst frame time every two seconds. */
+static void report_frame_stats(uint64_t now) {
+    static int enabled = -1;
+    static uint64_t window_start_us;
+    static uint64_t last_frame_us;
+    static uint64_t worst_frame_us;
+    static uint32_t frames;
+    if (enabled < 0) {
+        enabled = getenv("BOZ_TRACE_STATUS") != NULL;
+    }
+    if (!enabled) {
+        return;
+    }
+    if (last_frame_us && now - last_frame_us > worst_frame_us) {
+        worst_frame_us = now - last_frame_us;
+    }
+    last_frame_us = now;
+    ++frames;
+    if (!window_start_us) {
+        window_start_us = now;
+    } else if (now - window_start_us >= 2000000u) {
+        int vsync = 0;
+        uint64_t interval = egl_backend_frame_interval_us(&vsync);
+        fprintf(stderr, "[frames] %.1f fps, worst %.1f ms, display %.1f Hz, vsync %s\n",
+                frames * 1e6 / (double)(now - window_start_us), worst_frame_us / 1000.0,
+                interval ? 1e6 / (double)interval : 0.0, vsync ? "on" : "off");
+        window_start_us = now;
+        worst_frame_us = 0;
+        frames = 0;
+    }
+}
+
+/* With vsync the swap already waits for the display. Otherwise sleep to the display's refresh
+ * rate (or BOZ_FPS; BOZ_FPS=0 means no limit). */
 static void pace_frame(void) {
     static uint64_t next_frame_us;
+    static int fps_limit = -2;
     uint64_t now = monotonic_us();
+    report_frame_stats(now);
 
-    if (!next_frame_us || now > next_frame_us + FRAME_RESET_US) {
-        next_frame_us = now + FRAME_INTERVAL_US;
+    if (fps_limit == -2) {
+        const char *setting = getenv("BOZ_FPS");
+        fps_limit = setting && setting[0] ? atoi(setting) : -1;
+    }
+    int vsync = 0;
+    uint64_t interval = egl_backend_frame_interval_us(&vsync);
+    if (fps_limit > 0) {
+        interval = 1000000u / (uint64_t)fps_limit;
+    } else if (fps_limit == 0 || vsync) {
+        next_frame_us = 0;
+        return;
+    }
+    if (!interval) {
+        interval = FRAME_INTERVAL_US;
+    }
+
+    if (!next_frame_us || now > next_frame_us + interval * 4) {
+        next_frame_us = now + interval;
     }
 
     sleep_until_us(next_frame_us);
-    next_frame_us += FRAME_INTERVAL_US;
+    next_frame_us += interval;
 }
 
 GL_WRAP_FLOAT2(glAlphaFunc, GLenum, GLfloat)

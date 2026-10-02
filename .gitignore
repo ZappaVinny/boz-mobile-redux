@@ -2,6 +2,7 @@
 original/
 assets/
 saves/
+client.ini
 *.apk
 *.dz
 *.s3e

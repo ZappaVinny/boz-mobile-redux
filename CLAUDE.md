@@ -18,6 +18,7 @@ ARM `#if defined(__arm__)` paths are left in the source but nothing builds or sh
 - `runtime/`: the desktop runtime. Build with CMake presets: `cmake --preset linux-x86`, `cmake --build --preset linux-x86` (`linux-x86-tests` builds tests too), `ctest --preset linux-x86`. Outputs go to `build/linux-x86/bin/` (loader, extractor, `libSDL2`; loader RUNPATH is `$ORIGIN`). Then `scripts/setup-game.sh`, `scripts/run-desktop.sh`.
 - Windows: `cmake --preset windows-x86 && cmake --build --preset windows-x86 && scripts/package-windows.sh` (MinGW-w64 cross build; bundles Mesa from mesa-dist-win). Windows renders through Mesa's WGL `opengl32.dll`: SDL makes a desktop GL window and `s3e_egl.c` swaps in an OpenGL ES context via `WGL_EXT_create_context_es_profile` (Mesa's EGL can't create window surfaces on Windows). `src/platform/gl_probe_win32.c` picks `GALLIUM_DRIVER` at startup (d3d12, else llvmpipe). Linux tarball: `scripts/package-linux.sh`. CI: `.github/workflows/build.yml`; tags `v*` publish a release.
 - `runtime/third_party/patches/unicorn-*.patch`: applied to the Unicorn submodule at configure time (TLB/dirty-tracking speedups, Windows code-buffer commit fix).
+- `runtime/third_party/SDL2_mixer`: submodule (release-2.8.2), built shared with only minimp3 and WAVE decoders; bundled next to the loader on both platforms.
 - `runtime/third_party/unicorn`, `runtime/third_party/SDL2`: submodules, built 32-bit as CMake subprojects via `cmake/i686-linux.cmake` (the `gcc-m32` wrapper is required; Unicorn's CMake ignores `-m32` flags).
 - `tools/destin`: submodule for `dade`, the `.dz` asset extractor. Install with `uv tool install dade`. Always pass `--no-delete` to `dade marmalade extract-dz`; it deletes the source archive by default.
 - `original/` (gitignored): `com.activision.boz.apk` (1.0.11) and `obb/` with the CDN packs plus `.dz.dat` markers.
@@ -31,13 +32,14 @@ Never commit game files (`*.apk`, `*.dz`, extracted assets).
 - Target version 1.0.11 (versionCode 1045111). Packs come from `http://cdn-boz-android.callofduty.com/PROD/CODBOZ/1_0_9/`. The runtime needs `blackops_etc.dz` and `blackops_gles1.dz`; upstream setup expects SHA-256 `670cefce...` and `60846cf7...`.
 - The local APK is genuine game payload but a re-signed repack (adds `com.savegame.SavesRestoring` and `assets/su.save`, a premade save). The extractor skips `su.save`.
 - Image loads at `0x4a000000`. Game `memcpy` is at image offset `0x366000`.
-- Upstream's ARM crash-recovery hacks in `main.c` (fixed game offsets) are not yet ported to the emulator fault handler.
+- Known game crashes (fixed image offsets) are repaired in `src/codboz_crash_recovery.c` through `arm_emu_set_fault_handler`; the native ARM versions stay in `main.c`. Recoveries log `[arm] recovered ... fault` once per site; unrecovered faults print registers, `image+0x...` offsets and the stack.
 
 ## Debugging
 
 - `BOZ_TRACE_STATUS=1`: status line every 2 s (host call rate, last host function, main ARM pc/lr).
 - `BOZ_TRACE_CALLS=N`: log the first N host calls with arguments.
 - Emulator faults print `[arm] ... pc= lr=` with all registers.
+- Settings: `<root>/client.ini` (`src/client_config.c`) is translated into the `BOZ_*` variables below at startup; a variable already set wins.
 - Other env: `BOZ_DISPLAY=WxH`, `BOZ_STRETCH=1`, `BOZ_NO_SCALE=1`, `BOZ_MOUSE_SENS` (default 12000), `BOZ_LOOK_RADIUS`, `BOZ_LOOK_MODE=swipe`.
 - Hyprland here uses Lua dispatchers: `hyprctl dispatch 'hl.dsp.focus({ window = "class:codboz_s3e_loader" })'`.
 - Ghidra MCP: configured in a local, gitignored `.mcp.json` pointing at a ghidra-mcp clone. It only answers while Ghidra is open with a program loaded.

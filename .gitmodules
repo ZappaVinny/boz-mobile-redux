@@ -7,3 +7,6 @@
 [submodule "runtime/third_party/SDL2"]
 	path = runtime/third_party/SDL2
 	url = https://github.com/libsdl-org/SDL
+[submodule "runtime/third_party/SDL2_mixer"]
+	path = runtime/third_party/SDL2_mixer
+	url = https://github.com/libsdl-org/SDL_mixer

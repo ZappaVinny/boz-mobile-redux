@@ -62,6 +62,8 @@ struct sdl_video_api {
     void *(*GL_CreateContext)(void *window);
     int (*GL_MakeCurrent)(void *window, void *context);
     void (*GL_SwapWindow)(void *window);
+    int (*GL_SetSwapInterval)(int interval);
+    int (*GetWindowDisplayMode)(void *window, void *mode);
     void (*GL_GetDrawableSize)(void *window, int *w, int *h);
     void (*GL_DeleteContext)(void *context);
     void (*DestroyWindow)(void *window);
@@ -199,6 +201,8 @@ static int load_sdl_video(void) {
     ok &= load_symbol((void **)&g_sdl.api.GL_CreateContext, "SDL_GL_CreateContext");
     ok &= load_symbol((void **)&g_sdl.api.GL_MakeCurrent, "SDL_GL_MakeCurrent");
     ok &= load_symbol((void **)&g_sdl.api.GL_SwapWindow, "SDL_GL_SwapWindow");
+    load_symbol((void **)&g_sdl.api.GL_SetSwapInterval, "SDL_GL_SetSwapInterval");
+    load_symbol((void **)&g_sdl.api.GetWindowDisplayMode, "SDL_GetWindowDisplayMode");
     load_symbol((void **)&g_sdl.api.GL_GetDrawableSize, "SDL_GL_GetDrawableSize");
     ok &= load_symbol((void **)&g_sdl.api.GL_DeleteContext, "SDL_GL_DeleteContext");
     ok &= load_symbol((void **)&g_sdl.api.DestroyWindow, "SDL_DestroyWindow");
@@ -632,6 +636,29 @@ static EGLContext host_eglCreateContext(EGLDisplay display, EGLConfig config, EG
     return (EGLContext)g_sdl.context;
 }
 
+static int g_vsync_active;
+static int g_swap_interval_applied;
+
+/* BOZ_VSYNC: 1 (default) waits for vertical blank, -1 allows late frames to tear, 0 disables. */
+static void apply_swap_interval(void) {
+    if (g_swap_interval_applied || !g_sdl.api.GL_SetSwapInterval) {
+        return;
+    }
+    g_swap_interval_applied = 1;
+    const char *setting = getenv("BOZ_VSYNC");
+    int interval = setting && setting[0] ? atoi(setting) : 1;
+    if (interval == -1 && g_sdl.api.GL_SetSwapInterval(-1) != 0) {
+        interval = 1;
+    }
+    if (interval != -1 && g_sdl.api.GL_SetSwapInterval(interval ? 1 : 0) != 0) {
+        fprintf(stderr, "[egl] vsync unavailable: %s\n", sdl_error());
+        g_vsync_active = 0;
+        return;
+    }
+    g_vsync_active = interval != 0;
+    fprintf(stderr, "[egl] vsync %s\n", interval == -1 ? "adaptive" : interval ? "on" : "off");
+}
+
 static EGLBoolean host_eglMakeCurrent(EGLDisplay display, EGLSurface draw, EGLSurface read,
                                       EGLContext context) {
     if (!uses_sdl(display)) {
@@ -668,6 +695,7 @@ static EGLBoolean host_eglMakeCurrent(EGLDisplay display, EGLSurface draw, EGLSu
         return 0;
     }
     g_sdl.current = 1;
+    apply_swap_interval();
     return 1;
 }
 
@@ -880,6 +908,33 @@ EGLBoolean egl_backend_swap_buffers(EGLDisplay display, EGLSurface surface) {
     }
     g_sdl.api.GL_SwapWindow(g_sdl.window);
     return 1;
+}
+
+uint64_t egl_backend_frame_interval_us(int *vsync) {
+    static uint64_t cached_interval;
+    static uint64_t next_query_us;
+    if (vsync) {
+        *vsync = g_vsync_active;
+    }
+    if (!g_sdl.window || !g_sdl.api.GetWindowDisplayMode) {
+        return 0;
+    }
+    /* The window can move between monitors, so re-read the mode now and then. */
+    uint64_t now = monotonic_us();
+    if (now >= next_query_us) {
+        struct {
+            uint32_t format;
+            int w;
+            int h;
+            int refresh_rate;
+            void *driverdata;
+        } mode = {0};
+        next_query_us = now + 1000000u;
+        if (g_sdl.api.GetWindowDisplayMode(g_sdl.window, &mode) == 0 && mode.refresh_rate > 0) {
+            cached_interval = 1000000u / (uint64_t)mode.refresh_rate;
+        }
+    }
+    return cached_interval;
 }
 
 int egl_backend_drawable_size(int *width, int *height) {

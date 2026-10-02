@@ -1,5 +1,9 @@
 #include "s3e_host_internal.h"
 
+#include "client_config.h"
+
+#include <strings.h>
+
 #define ARRAY_SIZE(array) (sizeof(array) / sizeof((array)[0]))
 
 enum {
@@ -140,6 +144,7 @@ struct sdl_input_api {
     int (*SetRelativeMouseMode)(int enabled);
     void *(*GetMouseFocus)(void);
     void *(*GetKeyboardFocus)(void);
+    int (*GetScancodeFromName)(const char *name);
     uint32_t (*GetWindowFlags)(void *window);
     int (*SetWindowFullscreen)(void *window, uint32_t flags);
     void (*GetWindowSize)(void *window, int *w, int *h);
@@ -288,6 +293,7 @@ static void input_open(void) {
     sdl_load_optional_symbol((void **)&g_sdl.SetRelativeMouseMode, "SDL_SetRelativeMouseMode");
     sdl_load_optional_symbol((void **)&g_sdl.GetMouseFocus, "SDL_GetMouseFocus");
     sdl_load_optional_symbol((void **)&g_sdl.GetKeyboardFocus, "SDL_GetKeyboardFocus");
+    sdl_load_optional_symbol((void **)&g_sdl.GetScancodeFromName, "SDL_GetScancodeFromName");
     sdl_load_optional_symbol((void **)&g_sdl.GetWindowFlags, "SDL_GetWindowFlags");
     sdl_load_optional_symbol((void **)&g_sdl.SetWindowFullscreen, "SDL_SetWindowFullscreen");
     sdl_load_optional_symbol((void **)&g_sdl.GetWindowSize, "SDL_GetWindowSize");
@@ -748,6 +754,114 @@ enum {
     MOUSE_RIGHT = 1u << 2,
 };
 
+/* Desktop bindings: [keys] in client.ini, each a comma-separated list of SDL key names or
+ * Mouse1..Mouse5. */
+enum binding_id {
+    BIND_MOVE_FORWARD,
+    BIND_MOVE_BACK,
+    BIND_MOVE_LEFT,
+    BIND_MOVE_RIGHT,
+    BIND_SHOOT,
+    BIND_AIM,
+    BIND_RELOAD,
+    BIND_ACTION,
+    BIND_MELEE,
+    BIND_GRENADE,
+    BIND_TACTICAL,
+    BIND_CROUCH,
+    BIND_ALT_FIRE,
+    BIND_SWITCH_WEAPON,
+    BIND_PAUSE,
+    BIND_TOGGLE_MODE,
+    BIND_FULLSCREEN,
+    BIND_COUNT,
+    BIND_MAX_KEYS = 6,
+};
+
+static const struct {
+    const char *action;
+    const char *defaults;
+} BINDING_DEFAULTS[BIND_COUNT] = {
+    [BIND_MOVE_FORWARD] = {"move_forward", "W"},
+    [BIND_MOVE_BACK] = {"move_back", "S"},
+    [BIND_MOVE_LEFT] = {"move_left", "A"},
+    [BIND_MOVE_RIGHT] = {"move_right", "D"},
+    [BIND_SHOOT] = {"shoot", "Mouse1"},
+    [BIND_AIM] = {"aim", "Mouse3"},
+    [BIND_RELOAD] = {"reload", "R"},
+    [BIND_ACTION] = {"action", "E, F, Left Shift"},
+    [BIND_MELEE] = {"melee", "V"},
+    [BIND_GRENADE] = {"grenade", "G"},
+    [BIND_TACTICAL] = {"tactical", "Q"},
+    [BIND_CROUCH] = {"crouch", "C, Space"},
+    [BIND_ALT_FIRE] = {"alt_fire", "X"},
+    [BIND_SWITCH_WEAPON] = {"switch_weapon", "1"},
+    [BIND_PAUSE] = {"pause", "Escape"},
+    [BIND_TOGGLE_MODE] = {"toggle_mode", "Tab"},
+    [BIND_FULLSCREEN] = {"fullscreen", "F11"},
+};
+
+static struct {
+    int scancodes[BIND_MAX_KEYS];
+    int scancode_count;
+    uint32_t mouse_mask;
+} g_bindings[BIND_COUNT];
+static int g_bindings_loaded;
+static uint32_t g_mouse_buttons;
+
+static void parse_binding(enum binding_id id, const char *text) {
+    char copy[128];
+    snprintf(copy, sizeof(copy), "%s", text);
+    for (char *item = strtok(copy, ","); item; item = strtok(NULL, ",")) {
+        while (*item == ' ' || *item == '\t') {
+            ++item;
+        }
+        char *end = item + strlen(item);
+        while (end > item && (end[-1] == ' ' || end[-1] == '\t')) {
+            *--end = '\0';
+        }
+        if (!*item) {
+            continue;
+        }
+        if ((item[0] == 'M' || item[0] == 'm') && !strncasecmp(item, "mouse", 5) && item[5] >= '1' &&
+            item[5] <= '5' && !item[6]) {
+            g_bindings[id].mouse_mask |= 1u << (item[5] - '1');
+            continue;
+        }
+        int scancode = g_sdl.GetScancodeFromName ? g_sdl.GetScancodeFromName(item) : 0;
+        if (scancode <= 0) {
+            fprintf(stderr, "[input] unknown key \"%s\" for %s\n", item,
+                    BINDING_DEFAULTS[id].action);
+        } else if (g_bindings[id].scancode_count < BIND_MAX_KEYS) {
+            g_bindings[id].scancodes[g_bindings[id].scancode_count++] = scancode;
+        }
+    }
+}
+
+static void load_bindings(void) {
+    if (g_bindings_loaded) {
+        return;
+    }
+    g_bindings_loaded = 1;
+    for (int id = 0; id < BIND_COUNT; ++id) {
+        const char *configured = client_config_key_binding(BINDING_DEFAULTS[id].action);
+        parse_binding((enum binding_id)id, configured ? configured : BINDING_DEFAULTS[id].defaults);
+    }
+}
+
+static int binding_down(const uint8_t *keys, int count, enum binding_id id) {
+    if (g_bindings[id].mouse_mask & g_mouse_buttons) {
+        return 1;
+    }
+    for (int i = 0; keys && i < g_bindings[id].scancode_count; ++i) {
+        int scancode = g_bindings[id].scancodes[i];
+        if (scancode < count && keys[scancode]) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int g_desktop_game_mode;
 static int g_prev_tab;
 static int g_prev_fullscreen_key;
@@ -822,7 +936,6 @@ static int32_t desktop_axis(int negative, int positive) {
 
 static void desktop_update_game(const uint8_t *keys, int count, uint64_t dt) {
     int dx = 0, dy = 0;
-    uint32_t buttons = g_sdl.GetMouseState(NULL, NULL);
     if (g_sdl.GetRelativeMouseState) {
         g_sdl.GetRelativeMouseState(&dx, &dy);
     }
@@ -847,8 +960,10 @@ static void desktop_update_game(const uint8_t *keys, int count, uint64_t dt) {
     if (radius_env && atoi(radius_env) > 0 && atoi(radius_env) < look_radius) {
         look_radius = atoi(radius_env);
     }
-    touchpad_update_stick(0, desktop_axis(desktop_key(keys, count, SC_A), desktop_key(keys, count, SC_D)),
-                          desktop_axis(desktop_key(keys, count, SC_W), desktop_key(keys, count, SC_S)),
+    touchpad_update_stick(0, desktop_axis(binding_down(keys, count, BIND_MOVE_LEFT),
+                                          binding_down(keys, count, BIND_MOVE_RIGHT)),
+                          desktop_axis(binding_down(keys, count, BIND_MOVE_FORWARD),
+                                       binding_down(keys, count, BIND_MOVE_BACK)),
                           width / 5, height / 2, width / 5, height / 2);
     const char *mode = getenv("BOZ_LOOK_MODE");
     if (mode && strcmp(mode, "swipe") == 0) {
@@ -890,20 +1005,17 @@ static void desktop_update_game(const uint8_t *keys, int count, uint64_t dt) {
                               look_radius, look_radius);
     }
 
-    game_action_apply((buttons & MOUSE_LEFT) != 0, &KEYMAP_SHOOT);
-    game_action_apply((buttons & MOUSE_RIGHT) != 0, &KEYMAP_AIM);
-    game_action_apply(desktop_key(keys, count, SC_R), &KEYMAP_RELOAD);
-    game_action_apply(desktop_key(keys, count, SC_E) || desktop_key(keys, count, SC_F) ||
-                          desktop_key(keys, count, SC_LSHIFT),
-                      &KEYMAP_ACTION);
-    game_action_apply(desktop_key(keys, count, SC_V), &KEYMAP_MELEE);
-    game_action_apply(desktop_key(keys, count, SC_G), &KEYMAP_GRENADE);
-    game_action_apply(desktop_key(keys, count, SC_Q), &KEYMAP_TACTICAL);
-    game_action_apply(desktop_key(keys, count, SC_C) || desktop_key(keys, count, SC_SPACE),
-                      &KEYMAP_CROUCH);
-    game_action_apply(desktop_key(keys, count, SC_X), &KEYMAP_ALT_FIRE);
-    game_action_apply(desktop_key(keys, count, SC_1), &KEYMAP_CHANGE_WEAPON);
-    game_action_apply(desktop_key(keys, count, SC_ESCAPE), &KEYMAP_START);
+    game_action_apply(binding_down(keys, count, BIND_SHOOT), &KEYMAP_SHOOT);
+    game_action_apply(binding_down(keys, count, BIND_AIM), &KEYMAP_AIM);
+    game_action_apply(binding_down(keys, count, BIND_RELOAD), &KEYMAP_RELOAD);
+    game_action_apply(binding_down(keys, count, BIND_ACTION), &KEYMAP_ACTION);
+    game_action_apply(binding_down(keys, count, BIND_MELEE), &KEYMAP_MELEE);
+    game_action_apply(binding_down(keys, count, BIND_GRENADE), &KEYMAP_GRENADE);
+    game_action_apply(binding_down(keys, count, BIND_TACTICAL), &KEYMAP_TACTICAL);
+    game_action_apply(binding_down(keys, count, BIND_CROUCH), &KEYMAP_CROUCH);
+    game_action_apply(binding_down(keys, count, BIND_ALT_FIRE), &KEYMAP_ALT_FIRE);
+    game_action_apply(binding_down(keys, count, BIND_SWITCH_WEAPON), &KEYMAP_CHANGE_WEAPON);
+    game_action_apply(binding_down(keys, count, BIND_PAUSE), &KEYMAP_START);
 }
 
 /* F11 or Alt+Enter switches between a window and borderless fullscreen. */
@@ -926,18 +1038,20 @@ static void desktop_update(uint64_t dt) {
     if (!desktop_available()) {
         return;
     }
+    load_bindings();
     void *window = g_sdl.GetMouseFocus();
     int count = 0;
     const uint8_t *keys = g_sdl.GetKeyboardState(&count);
+    g_mouse_buttons = g_sdl.GetMouseState(NULL, NULL);
     int fullscreen_key =
-        keys && (desktop_key(keys, count, SC_F11) ||
+        keys && (binding_down(keys, count, BIND_FULLSCREEN) ||
                  (desktop_key(keys, count, SC_RETURN) &&
                   (desktop_key(keys, count, SC_LALT) || desktop_key(keys, count, SC_RALT))));
     if (fullscreen_key && !g_prev_fullscreen_key) {
         desktop_toggle_fullscreen();
     }
     g_prev_fullscreen_key = fullscreen_key;
-    int tab = keys && desktop_key(keys, count, SC_TAB);
+    int tab = binding_down(keys, count, BIND_TOGGLE_MODE);
     if (tab && !g_prev_tab) {
         desktop_set_game_mode(!g_desktop_game_mode);
     }

@@ -6,7 +6,7 @@ stage="$build/package/BOZ-Redux"
 rm -rf "$build/package"
 mkdir -p "$stage"
 cp "$build/bin/codboz_s3e_loader" "$build/bin/codboz_apk_extract" "$stage/"
-cp -P "$build/bin/"libSDL2-2.0.so* "$stage/"
+cp -P "$build/bin/"libSDL2-2.0.so* "$build/bin/"libSDL2_mixer-2.0.so* "$stage/"
 cp "$here/packaging/linux/setup.sh" "$here/packaging/linux/run.sh" "$here/packaging/linux/README.txt" "$stage/"
 cp "$here/packaging/THIRD-PARTY.txt" "$stage/"
 (cd "$build/package" && tar -czf BOZ-Redux-linux-x86.tar.gz BOZ-Redux)

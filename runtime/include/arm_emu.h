@@ -13,4 +13,17 @@ void arm_emu_thread_exit(void);
 uint32_t arm_emu_call_scratch(void);
 uint64_t arm_emu_call_host(uint32_t fn, const uint32_t *args);
 
+/* A guest memory fault. r[15] is the faulting instruction (no Thumb bit); thumb is its mode. */
+struct arm_emu_fault {
+    uint32_t r[16];
+    uint32_t address;
+    bool write;
+    bool thumb;
+};
+
+/* Called when guest code touches unmapped memory. Return true after editing r[] (and thumb) to
+ * resume at r[15]; false lets the fault stop the game. */
+typedef bool (*arm_emu_fault_handler)(struct arm_emu_fault *fault);
+void arm_emu_set_fault_handler(arm_emu_fault_handler handler);
+
 #endif

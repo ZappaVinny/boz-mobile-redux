@@ -63,6 +63,19 @@ static uint64_t call_host16(uint32_t fn, const uint32_t *args) {
 static uint32_t *g_svc_page;
 static __thread struct arm_emu *t_emu;
 static __thread uint32_t t_call_scratch;
+static __thread uint32_t t_fault_address;
+static __thread uc_mem_type t_fault_type;
+static arm_emu_fault_handler g_fault_handler;
+
+static const int k_gpr_ids[16] = {
+    UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2,  UC_ARM_REG_R3,  UC_ARM_REG_R4,  UC_ARM_REG_R5,
+    UC_ARM_REG_R6, UC_ARM_REG_R7, UC_ARM_REG_R8,  UC_ARM_REG_R9,  UC_ARM_REG_R10, UC_ARM_REG_R11,
+    UC_ARM_REG_R12, UC_ARM_REG_SP, UC_ARM_REG_LR, UC_ARM_REG_PC,
+};
+
+void arm_emu_set_fault_handler(arm_emu_fault_handler handler) {
+    g_fault_handler = handler;
+}
 static long g_trace_limit;
 static _Atomic unsigned long g_host_calls;
 static _Atomic unsigned long g_traced;
@@ -250,19 +263,32 @@ static void *svc_shadow(size_t size) {
 
 static void report_fault(uc_engine *uc, const char *what, uint64_t address) {
     uint32_t r[16];
-    static const int ids[16] = {
-        UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2,  UC_ARM_REG_R3,  UC_ARM_REG_R4,  UC_ARM_REG_R5,
-        UC_ARM_REG_R6, UC_ARM_REG_R7, UC_ARM_REG_R8,  UC_ARM_REG_R9,  UC_ARM_REG_R10, UC_ARM_REG_R11,
-        UC_ARM_REG_R12, UC_ARM_REG_SP, UC_ARM_REG_LR, UC_ARM_REG_PC,
-    };
     for (int i = 0; i < 16; ++i) {
-        uc_reg_read(uc, ids[i], &r[i]);
+        uc_reg_read(uc, k_gpr_ids[i], &r[i]);
     }
     fprintf(stderr, "[arm] %s at 0x%08" PRIx64 " pc=%08x lr=%08x sp=%08x\n", what, address, r[15],
             r[14], r[13]);
+    /* Image offsets match Ghidra (image loaded at 0x4a000000) and the crash recovery table. */
+    if (g_image_start) {
+        const char *labels[2] = {"pc", "lr"};
+        uint32_t values[2] = {r[15], r[14]};
+        for (int i = 0; i < 2; ++i) {
+            if (values[i] >= g_image_start && values[i] < g_image_end) {
+                fprintf(stderr, "[arm]   %s = image+0x%06x\n", labels[i], values[i] - g_image_start);
+            }
+        }
+    }
     for (int i = 0; i < 13; i += 4) {
         fprintf(stderr, "[arm]   r%-2d=%08x r%-2d=%08x r%-2d=%08x r%-2d=%08x\n", i, r[i], i + 1,
                 r[i + 1], i + 2, r[i + 2], i + 3, r[i + 3]);
+    }
+    uint32_t stack[16];
+    if (uc_mem_read(uc, r[13], stack, sizeof(stack)) == UC_ERR_OK) {
+        for (int i = 0; i < 16; i += 8) {
+            fprintf(stderr, "[arm]   sp+%02x: %08x %08x %08x %08x %08x %08x %08x %08x\n", i * 4,
+                    stack[i], stack[i + 1], stack[i + 2], stack[i + 3], stack[i + 4],
+                    stack[i + 5], stack[i + 6], stack[i + 7]);
+        }
     }
 }
 
@@ -293,8 +319,9 @@ static bool on_unmapped(uc_engine *uc, uc_mem_type type, uint64_t address, int s
             }
         }
     }
-    report_fault(uc, type == UC_MEM_WRITE_UNMAPPED ? "write to unmapped" : type == UC_MEM_FETCH_UNMAPPED ? "fetch from unmapped" : "read from unmapped",
-                 address);
+    /* arm_emu_call reports the fault if no recovery handler takes it. */
+    t_fault_address = (uint32_t)address;
+    t_fault_type = type;
     return false;
 }
 
@@ -402,6 +429,45 @@ bool arm_emu_init(void) {
     return true;
 }
 
+/* Gives a data fault to the game-specific handler; on success sets *resume to continue from. */
+static bool recover_fault(uc_engine *uc, uc_err err, uint64_t *resume) {
+    if (!g_fault_handler || (err != UC_ERR_READ_UNMAPPED && err != UC_ERR_WRITE_UNMAPPED)) {
+        return false;
+    }
+    struct arm_emu_fault fault = {
+        .address = t_fault_address,
+        .write = err == UC_ERR_WRITE_UNMAPPED,
+    };
+    uint32_t cpsr = 0;
+    for (int i = 0; i < 16; ++i) {
+        uc_reg_read(uc, k_gpr_ids[i], &fault.r[i]);
+    }
+    uc_reg_read(uc, UC_ARM_REG_CPSR, &cpsr);
+    fault.thumb = (cpsr & (1u << 5)) != 0;
+    fault.r[15] &= ~1u;
+    uint32_t pc = fault.r[15];
+    if (!g_fault_handler(&fault)) {
+        return false;
+    }
+    for (int i = 0; i < 15; ++i) {
+        uc_reg_write(uc, k_gpr_ids[i], &fault.r[i]);
+    }
+    *resume = (fault.r[15] & ~1u) | (fault.thumb ? 1u : 0u);
+    static uint32_t reported_pc[16];
+    for (int i = 0; i < 16; ++i) {
+        if (reported_pc[i] == pc) {
+            break;
+        }
+        if (!reported_pc[i]) {
+            reported_pc[i] = pc;
+            fprintf(stderr, "[arm] recovered %s fault at 0x%08x (pc=%08x)\n",
+                    fault.write ? "write" : "read", fault.address, pc);
+            break;
+        }
+    }
+    return true;
+}
+
 uint64_t arm_emu_call(uint32_t fn, int argc, const uint32_t *argv) {
     if (!t_emu) {
         t_emu = emu_create();
@@ -434,11 +500,23 @@ uint64_t arm_emu_call(uint32_t fn, int argc, const uint32_t *argv) {
     uc_reg_write(uc, UC_ARM_REG_LR, &lr);
 
     t_emu->depth++;
-    uc_err err = uc_emu_start(uc, fn, t_emu->sentinel, 0, 0);
+    uint64_t start = fn;
+    uc_err err;
+    while ((err = uc_emu_start(uc, start, t_emu->sentinel, 0, 0)) != UC_ERR_OK &&
+           recover_fault(uc, err, &start)) {
+    }
     t_emu->depth--;
     if (err != UC_ERR_OK) {
         uint32_t pc;
         uc_reg_read(uc, UC_ARM_REG_PC, &pc);
+        if (err == UC_ERR_READ_UNMAPPED || err == UC_ERR_WRITE_UNMAPPED ||
+            err == UC_ERR_FETCH_UNMAPPED) {
+            report_fault(uc,
+                         t_fault_type == UC_MEM_WRITE_UNMAPPED   ? "write to unmapped"
+                         : t_fault_type == UC_MEM_FETCH_UNMAPPED ? "fetch from unmapped"
+                                                                 : "read from unmapped",
+                         t_fault_address);
+        }
         fprintf(stderr, "[arm] call 0x%08x stopped: %s (pc=%08x)\n", fn, uc_strerror(err), pc);
         abort();
     }
