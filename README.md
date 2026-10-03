@@ -71,7 +71,7 @@ Settings live in `client.ini` next to the game data (the repo root when running 
 
 ## Credits
 
-The runtime is a fork of [cod-boz-port](https://github.com/Producdevity/cod-boz-port) by Producdevity (MIT). It uses [Unicorn](https://github.com/unicorn-engine/unicorn) and [SDL2](https://github.com/libsdl-org/SDL). Asset tools come from [destin](https://github.com/Tatsh/destin).
+The runtime is a fork of [cod-boz-port](https://github.com/Producdevity/cod-boz-port) by Producdevity (MIT). It uses [Unicorn](https://github.com/unicorn-engine/unicorn) and [SDL2](https://github.com/libsdl-org/SDL). Modding tools, reverse engineering and documentation live in [boz-redux-sdk](https://github.com/ZappaVinny/boz-redux-sdk); the game definition the client reads for mods is [boz-redux-gamedef](https://github.com/ZappaVinny/boz-redux-gamedef) (the `gamedef/` submodule).
 
 ## License
 

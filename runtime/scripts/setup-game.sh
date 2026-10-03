@@ -15,7 +15,7 @@ cdn="$("$extract" print-cdn "$game/assets/boz.s3e.unpacked")"
 
 for pack in blackops_etc.dz blackops_gles1.dz; do
   if [ -f "$packs/$pack" ]; then
-    ln -sfn "$(realpath "$packs/$pack")" "$game/assets/$pack"
+    ln -sfn "$(realpath --relative-to="$game/assets" "$packs/$pack")" "$game/assets/$pack"
   else
     echo "downloading $pack from $cdn"
     curl -fL -o "$game/assets/$pack" "$cdn$pack"

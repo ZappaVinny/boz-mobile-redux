@@ -70,7 +70,7 @@ A mod is a folder or `.zip`:
 
 - **Players:** testing on different hardware, especially Windows, helps the most right now.
 - **Modders:** the mod format and Lua API will be documented here as they land.
-- **Reverse engineers:** the symbol database and the `.group.bin` format are the big shared projects.
+- **Reverse engineers and modders:** the tools, the symbol database and the format documentation are in [boz-redux-sdk](https://github.com/ZappaVinny/boz-redux-sdk).
 
 ## Credits
 
